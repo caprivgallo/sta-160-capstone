@@ -3,18 +3,36 @@ import plotly.express as px
 import plotly.figure_factory as ff
 from dash import Dash, dcc, html, Input, Output, dash_table
 
-# --- Load and clean data ---
+# --- Load dataset ---
 data = pd.read_csv("merged_final_data.csv")
 
-# Clean tempo (remove brackets if they exist)
-data["tempo"] = (
-    data["tempo"].astype(str)
-    .str.replace("[", "", regex=False)
-    .str.replace("]", "", regex=False)
-    .astype(float)
-)
+# --- Clean up dataset for presentation ---
 
-# Ensure numeric columns
+# 1. Drop messy or unnecessary columns
+drop_cols = ["filename", "Uri", "Url_spotify", "Url_youtube", "video_id", "Track_URL_Spotify"]
+for col in drop_cols:
+    if col in data.columns:
+        data = data.drop(columns=[col])
+
+# 2. Remove file extensions (.opus) from Track/Title if they exist
+if "Track" in data.columns:
+    data["Track"] = data["Track"].astype(str).str.replace(".opus", "", regex=False)
+if "Title" in data.columns:
+    data["Title"] = data["Title"].astype(str).str.replace(".opus", "", regex=False)
+
+# 3. Make column names more readable (capitalize and remove underscores)
+data = data.rename(columns=lambda x: x.replace("_", " ").title())
+
+# 4. Handle tempo (brackets to float if needed)
+if "Tempo" in data.columns:
+    data["Tempo"] = (
+        data["Tempo"].astype(str)
+        .str.replace("[", "", regex=False)
+        .str.replace("]", "", regex=False)
+        .astype(float)
+    )
+
+# 5. Ensure numeric columns
 numeric_cols = data.select_dtypes(include="number").columns
 
 # --- Initialize app ---
@@ -46,7 +64,7 @@ app.layout = html.Div(
     ]
 )
 
-# --- Callbacks for tabs ---
+# --- Tab content callback ---
 @app.callback(Output("tabs-content", "children"), Input("tabs", "value"))
 def render_tab(tab):
     if tab == "overview":
@@ -73,11 +91,11 @@ def render_tab(tab):
     elif tab == "scatter":
         return html.Div([
             html.H2("Interactive Scatterplots"),
-            html.P("Choose variables to see relationships between audio features and engagement metrics."),
+            html.P("Choose variables to explore relationships between features and engagement."),
             html.Label("Select X-axis:"),
-            dcc.Dropdown(id="x-col", options=[{"label": c, "value": c} for c in numeric_cols], value="tempo"),
+            dcc.Dropdown(id="x-col", options=[{"label": c, "value": c} for c in numeric_cols], value="Tempo"),
             html.Label("Select Y-axis:"),
-            dcc.Dropdown(id="y-col", options=[{"label": c, "value": c} for c in numeric_cols], value="energy"),
+            dcc.Dropdown(id="y-col", options=[{"label": c, "value": c} for c in numeric_cols], value="Views"),
             dcc.Graph(id="scatter-plot")
         ])
 
@@ -86,7 +104,7 @@ def render_tab(tab):
             html.H2("Distributions"),
             html.P("Explore the distribution of different numeric features."),
             html.Label("Select variable:"),
-            dcc.Dropdown(id="dist-col", options=[{"label": c, "value": c} for c in numeric_cols], value="views"),
+            dcc.Dropdown(id="dist-col", options=[{"label": c, "value": c} for c in numeric_cols], value="Likes"),
             dcc.Graph(id="hist-plot"),
             dcc.Graph(id="box-plot")
         ])
