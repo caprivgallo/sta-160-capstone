@@ -41,16 +41,28 @@ server = app.server
 
 # --- Layout with Tabs ---
 app.layout = html.Div(
-    style={"fontFamily": "Arial, sans-serif", "margin": "20px"},
+    style={"fontFamily": "Arial, sans-serif", "margin": "0", "padding": "0", "backgroundColor": "#f8f9fa"},
     children=[
-        html.H1("🎶 STA 160 Capstone Dashboard", style={"textAlign": "center"}),
+        # Top banner
+        html.Div(
+            "STA 160 Capstone Dashboard",
+            style={
+                "textAlign": "center",
+                "backgroundColor": "#003366",   # dark blue banner
+                "color": "white",
+                "padding": "20px",
+                "fontSize": "28px",
+                "fontWeight": "bold"
+            }
+        ),
 
+        # Intro paragraph
         html.P(
             "For our STA 160 thesis capstone, we have built an interactive dashboard to display our findings. "
             "It explores how audio features from Spotify and popularity metrics from YouTube "
             "interact to reveal what makes certain songs successful. "
             "Use the tabs below to explore different views of the data.",
-            style={"textAlign": "center", "fontSize": "18px"}
+            style={"textAlign": "center", "fontSize": "18px", "margin": "20px"}
         ),
 
         dcc.Tabs(id="tabs", value="overview", children=[
@@ -60,7 +72,7 @@ app.layout = html.Div(
             dcc.Tab(label="Correlation Heatmap", value="corr"),
         ]),
 
-        html.Div(id="tabs-content", style={"marginTop": "20px"})
+        html.Div(id="tabs-content", style={"margin": "20px"})
     ]
 )
 
@@ -82,9 +94,18 @@ def render_tab(tab):
             dash_table.DataTable(
                 data=data.head(5).to_dict("records"),
                 columns=[{"name": i, "id": i} for i in data.columns],
-                style_table={"overflowX": "auto"},
-                style_cell={"padding": "5px", "textAlign": "left", "fontFamily": "Arial"},
-                style_header={"backgroundColor": "#f4f4f4", "fontWeight": "bold"}
+                style_table={"overflowX": "auto", "border": "1px solid #ddd"},
+                style_cell={
+                    "padding": "8px",
+                    "textAlign": "left",
+                    "fontFamily": "Arial",
+                    "backgroundColor": "white"
+                },
+                style_header={
+                    "backgroundColor": "#003366",
+                    "color": "white",
+                    "fontWeight": "bold"
+                }
             )
         ])
 
