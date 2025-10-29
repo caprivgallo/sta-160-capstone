@@ -8,22 +8,22 @@ data = pd.read_csv("merged_final_data.csv")
 
 # --- Clean up dataset for presentation ---
 
-# 1. Drop messy or unnecessary columns
+# Drop messy/unnecessary columns
 drop_cols = ["filename", "Uri", "Url_spotify", "Url_youtube", "video_id", "Track_URL_Spotify"]
 for col in drop_cols:
     if col in data.columns:
         data = data.drop(columns=[col])
 
-# 2. Remove file extensions (.opus) from Track/Title if they exist
+# Clean Track/Title from .opus if present
 if "Track" in data.columns:
     data["Track"] = data["Track"].astype(str).str.replace(".opus", "", regex=False)
 if "Title" in data.columns:
     data["Title"] = data["Title"].astype(str).str.replace(".opus", "", regex=False)
 
-# 3. Make column names more readable (capitalize and remove underscores)
+# Make columns nicer (capitalize/remove underscores)
 data = data.rename(columns=lambda x: x.replace("_", " ").title())
 
-# 4. Handle tempo (brackets to float if needed)
+# Handle tempo (brackets to float if needed)
 if "Tempo" in data.columns:
     data["Tempo"] = (
         data["Tempo"].astype(str)
@@ -32,31 +32,28 @@ if "Tempo" in data.columns:
         .astype(float)
     )
 
-# 5. Ensure numeric columns
+# Numeric columns
 numeric_cols = data.select_dtypes(include="number").columns
 
 # --- Initialize app ---
 app = Dash(__name__, suppress_callback_exceptions=True)
 server = app.server
 
-# --- Layout with Tabs ---
+# --- Layout ---
 app.layout = html.Div(
     style={"fontFamily": "Arial, sans-serif", "margin": "0", "padding": "0", "backgroundColor": "#f8f9fa"},
     children=[
-        # Top banner
         html.Div(
             "STA 160 Capstone Dashboard",
             style={
                 "textAlign": "center",
-                "backgroundColor": "#003366",   # dark blue banner
+                "backgroundColor": "#003366",
                 "color": "white",
                 "padding": "20px",
                 "fontSize": "28px",
                 "fontWeight": "bold"
             }
         ),
-
-        # Intro paragraph
         html.P(
             "For our STA 160 thesis capstone, we have built an interactive dashboard to display our findings. "
             "It explores how audio features from Spotify and popularity metrics from YouTube "
@@ -64,22 +61,24 @@ app.layout = html.Div(
             "Use the tabs below to explore different views of the data.",
             style={"textAlign": "center", "fontSize": "18px", "margin": "20px"}
         ),
-
         dcc.Tabs(id="tabs", value="overview", children=[
             dcc.Tab(label="Overview", value="overview"),
             dcc.Tab(label="Scatterplots", value="scatter"),
             dcc.Tab(label="Distributions", value="dist"),
             dcc.Tab(label="Correlation Heatmap", value="corr"),
         ]),
-
         html.Div(id="tabs-content", style={"margin": "20px"})
     ]
 )
 
-# --- Tab content callback ---
+# --- Tabs callback ---
 @app.callback(Output("tabs-content", "children"), Input("tabs", "value"))
 def render_tab(tab):
     if tab == "overview":
+        # Columns to show in preview
+        preview_cols = ["Track", "Artist", "Title", "Album", "Views", "Likes", "Comments", "Tempo", "Energy"]
+        available_cols = [c for c in preview_cols if c in data.columns]
+
         return html.Div([
             html.H2("Project Overview"),
             html.P(
@@ -92,20 +91,11 @@ def render_tab(tab):
             html.P("Below is a preview of the dataset (first 5 rows):", style={"marginTop": "15px"}),
 
             dash_table.DataTable(
-                data=data.head(5).to_dict("records"),
-                columns=[{"name": i, "id": i} for i in data.columns],
+                data=data[available_cols].head(5).to_dict("records"),
+                columns=[{"name": i, "id": i} for i in available_cols],
                 style_table={"overflowX": "auto", "border": "1px solid #ddd"},
-                style_cell={
-                    "padding": "8px",
-                    "textAlign": "left",
-                    "fontFamily": "Arial",
-                    "backgroundColor": "white"
-                },
-                style_header={
-                    "backgroundColor": "#003366",
-                    "color": "white",
-                    "fontWeight": "bold"
-                }
+                style_cell={"padding": "8px", "textAlign": "left", "fontFamily": "Arial", "backgroundColor": "white"},
+                style_header={"backgroundColor": "#003366", "color": "white", "fontWeight": "bold"}
             )
         ])
 
@@ -146,7 +136,7 @@ def render_tab(tab):
             dcc.Graph(figure=fig)
         ])
 
-# --- Scatterplot callback ---
+# --- Scatter callback ---
 @app.callback(
     Output("scatter-plot", "figure"),
     Input("x-col", "value"),
@@ -173,6 +163,6 @@ def update_dist(col):
     box = px.box(data, y=col, template="plotly_white", title=f"Boxplot of {col}")
     return hist, box
 
-# --- Run server ---
+# --- Run ---
 if __name__ == "__main__":
     app.run(debug=True)
