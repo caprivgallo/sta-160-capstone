@@ -2,10 +2,10 @@ import pandas as pd
 from dash import Dash, dcc, html, Input, Output, dash_table
 import dash_bootstrap_components as dbc
 
-# === Load Data ===
+# === Load and clean data ===
 data = pd.read_csv("merged_final_data.csv")
 
-# --- Clean numeric columns ---
+# Clean numeric columns
 data["tempo"] = (
     data["tempo"]
     .astype(str)
@@ -25,24 +25,40 @@ data["duration_min"] = data["duration_ms"].apply(
 # Drop missing values
 data = data.dropna(subset=["tempo", "energy"])
 
-# === App Setup ===
+# === App setup ===
 app = Dash(__name__, external_stylesheets=[dbc.themes.FLATLY])
 server = app.server
-app.title = "STA 160 Capstone Dashboard"
+app.title = "The Science of Song Success"
 
 # === Layout ===
 app.layout = html.Div(
-    style={"backgroundColor": "#fff5f5", "fontFamily": "Open Sans, sans-serif", "padding": "20px"},
+    style={
+        "backgroundColor": "#fff5f5",
+        "fontFamily": "Open Sans, sans-serif",
+        "padding": "20px",
+    },
     children=[
         html.H1(
-            "STA 160 Capstone Dashboard",
-            style={"textAlign": "center", "color": "#8B0000", "fontWeight": "bold"},
+            "The Science of Song Success",
+            style={
+                "textAlign": "center",
+                "color": "#8B0000",
+                "fontWeight": "bold",
+                "marginBottom": "10px",
+            },
         ),
         html.P(
-            "For our STA 160 thesis capstone, we have built an interactive dashboard to visualize our findings. "
-            "It examines how Spotify audio features and YouTube engagement metrics (such as views, likes, and comments) "
-            "relate to one another to uncover what drives a song’s success. Use the tabs below to explore our interactive analyses and results.",
-            style={"textAlign": "center", "fontSize": "16px", "maxWidth": "1000px", "margin": "auto"},
+            "For our capstone project, we have built an interactive dashboard to visualize our findings. "
+            "Our dashboard examines how different Spotify audio features and YouTube engagement metrics "
+            "relate to one another, and how this relation drives a song’s success. Below are several tabs to display "
+            "simple summary statistics, the deep learning model we trained, and all relevant visuals for this project.",
+            style={
+                "textAlign": "center",
+                "fontSize": "16px",
+                "maxWidth": "950px",
+                "margin": "auto",
+                "lineHeight": "1.6",
+            },
         ),
         html.Br(),
 
@@ -51,16 +67,20 @@ app.layout = html.Div(
             value="summary",
             children=[
                 dcc.Tab(label="Summary Statistics", value="summary", style={"fontWeight": "600"}),
-                dcc.Tab(label="Scatterplots", value="scatter", style={"fontWeight": "600"}),
-                dcc.Tab(label="Distributions", value="dist", style={"fontWeight": "600"}),
-                dcc.Tab(label="Correlation Heatmap", value="corr", style={"fontWeight": "600"}),
+                dcc.Tab(label="Deep Learning Model", value="model", style={"fontWeight": "600"}),
+                dcc.Tab(label="Visuals", value="visuals", style={"fontWeight": "600"}),
             ],
         ),
         html.Div(id="tab-content", style={"padding": "20px"}),
 
         html.Footer(
-            "Developed by Team 13 – STA 160 Capstone, UC Davis (Fall 2025)",
-            style={"textAlign": "center", "color": "#8B0000", "marginTop": "40px", "fontSize": "13px"},
+            "Developed by Team 13 – The Science of Song Success | UC Davis, Fall 2025",
+            style={
+                "textAlign": "center",
+                "color": "#8B0000",
+                "marginTop": "40px",
+                "fontSize": "13px",
+            },
         ),
     ],
 )
@@ -80,18 +100,72 @@ def render_tab(tab):
                     placeholder="Select an artist...",
                     style={"width": "50%", "marginBottom": "25px"},
                 ),
+                html.Label("Search Songs or Albums:"),
+                dcc.Input(
+                    id="search-bar",
+                    type="text",
+                    placeholder="Search...",
+                    debounce=True,
+                    style={
+                        "width": "50%",
+                        "marginBottom": "25px",
+                        "padding": "8px",
+                        "border": "1px solid #8B0000",
+                        "borderRadius": "5px",
+                    },
+                ),
                 html.Div(id="summary-output"),
             ]
         )
-    else:
-        return html.P("Additional visualizations will appear here.")
+
+    elif tab == "model":
+        return html.Div(
+            [
+                html.H3("Deep Learning Model Overview", style={"color": "#8B0000", "fontWeight": "bold"}),
+                html.P(
+                    "Our model uses audio and engagement features to predict song popularity. "
+                    "We trained it using regression and deep learning architectures to identify the strongest predictors "
+                    "of success across thousands of tracks.",
+                    style={"fontSize": "16px", "maxWidth": "900px"},
+                ),
+            ]
+        )
+
+    elif tab == "visuals":
+        return html.Div(
+            [
+                html.H3("Visuals and Data Exploration", style={"color": "#8B0000", "fontWeight": "bold"}),
+                html.P(
+                    "This section will include interactive charts, scatterplots, and correlation heatmaps "
+                    "showing the relationships between song features and performance metrics.",
+                    style={"fontSize": "16px", "maxWidth": "900px"},
+                ),
+            ]
+        )
+
+    return html.P("Select a tab to view content.")
 
 
-@app.callback(Output("summary-output", "children"), [Input("artist-dropdown", "value")])
-def update_summary(artist):
-    df = data if artist is None else data[data["Artist"] == artist]
+# === Summary tab callback ===
+@app.callback(
+    Output("summary-output", "children"),
+    [Input("artist-dropdown", "value"), Input("search-bar", "value")],
+)
+def update_summary(artist, search_query):
+    df = data.copy()
 
-    # Key stats for cards
+    # Apply filters
+    if artist:
+        df = df[df["Artist"] == artist]
+    if search_query:
+        search_query = search_query.lower()
+        df = df[
+            df["filename"].str.lower().str.contains(search_query, na=False)
+            | df["Album"].str.lower().str.contains(search_query, na=False)
+            | df["Artist"].str.lower().str.contains(search_query, na=False)
+        ]
+
+    # Summary cards
     stats = [
         {"label": "Songs", "value": len(df)},
         {"label": "Avg Tempo (BPM)", "value": f"{df['tempo'].mean():.1f}"},
@@ -99,7 +173,6 @@ def update_summary(artist):
         {"label": "Avg Loudness (dB)", "value": f"{df['loudness'].mean():.1f}"},
     ]
 
-    # Cards layout
     cards = dbc.Row(
         [
             dbc.Col(
@@ -110,7 +183,11 @@ def update_summary(artist):
                             html.H3(stat["value"], className="card-text"),
                         ]
                     ),
-                    style={"backgroundColor": "#fff", "boxShadow": "0 2px 6px rgba(0,0,0,0.1)", "borderRadius": "10px"},
+                    style={
+                        "backgroundColor": "#fff",
+                        "boxShadow": "0 2px 6px rgba(0,0,0,0.1)",
+                        "borderRadius": "10px",
+                    },
                 ),
                 width=3,
             )
@@ -119,9 +196,9 @@ def update_summary(artist):
         className="g-3",
     )
 
-    # Data Table
+    # Interactive data table
     table = dash_table.DataTable(
-        df[["filename", "duration_min", "tempo", "loudness", "energy", "Views", "Likes"]].head(10).to_dict("records"),
+        df[["filename", "duration_min", "tempo", "loudness", "energy", "Views", "Likes"]].to_dict("records"),
         [{"name": col, "id": col} for col in ["filename", "duration_min", "tempo", "loudness", "energy", "Views", "Likes"]],
         style_table={"overflowX": "auto", "marginTop": "25px"},
         style_header={
@@ -132,6 +209,7 @@ def update_summary(artist):
         },
         style_data={"backgroundColor": "#fffaf9", "border": "1px solid #eee"},
         sort_action="native",
+        filter_action="native",
         page_size=10,
     )
 
