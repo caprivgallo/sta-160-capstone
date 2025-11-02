@@ -1,5 +1,6 @@
 import os
 import pandas as pd
+import plotly.express as px
 from dash import Dash, dcc, html, Input, Output, dash_table
 import dash_bootstrap_components as dbc
 
@@ -29,6 +30,7 @@ data = data.dropna(subset=["tempo", "energy"])
 # === Optionally load model summary and metrics ===
 model_summary_text = None
 model_metrics = None
+training_data = None
 
 if os.path.exists("model_summary.txt"):
     with open("model_summary.txt", "r") as f:
@@ -36,6 +38,16 @@ if os.path.exists("model_summary.txt"):
 
 if os.path.exists("model_results.csv"):
     model_metrics = pd.read_csv("model_results.csv")
+
+if os.path.exists("training_history.csv"):
+    training_data = pd.read_csv("training_history.csv")
+else:
+    # Dummy loss curve if no file is uploaded
+    training_data = pd.DataFrame({
+        "epoch": range(1, 21),
+        "loss": [1.0/(i+0.5) + 0.05 for i in range(20)],
+        "val_loss": [1.0/(i+0.7) + 0.07 for i in range(20)]
+    })
 
 # === App setup ===
 app = Dash(__name__, external_stylesheets=[dbc.themes.FLATLY])
@@ -129,7 +141,7 @@ def render_tab(tab):
             html.Br(),
         ]
 
-        # Display model summary if available
+        # Model summary
         if model_summary_text:
             content.append(
                 html.Div(
@@ -142,7 +154,7 @@ def render_tab(tab):
         else:
             content.append(html.P("Model summary not yet uploaded (expected file: model_summary.txt)."))
 
-        # Display metrics if available
+        # Model metrics
         if model_metrics is not None:
             content.append(
                 html.Div(
@@ -166,14 +178,31 @@ def render_tab(tab):
         else:
             content.append(html.P("Model results not yet uploaded (expected file: model_results.csv)."))
 
-        # Placeholder for future visualizations
+        # --- Add training visualization (Loss Curve) ---
+        fig = px.line(
+            training_data,
+            x="epoch",
+            y=["loss", "val_loss"],
+            labels={"value": "Loss", "epoch": "Epoch", "variable": "Type"},
+            title="Training and Validation Loss Curve",
+        )
+        fig.update_layout(
+            plot_bgcolor="#fffaf9",
+            paper_bgcolor="#fffaf9",
+            title_font_color="#8B0000",
+            font={"family": "Open Sans"},
+        )
+
         content.append(
             html.Div(
                 [
-                    html.H5("Training Visualizations", style={"color": "#8B0000"}),
-                    html.P("Add loss curves, prediction plots, or feature importance here once model outputs are ready."),
-                ],
-                style={"marginTop": "20px"},
+                    html.H5("Training Visualizations", style={"color": "#8B0000", "marginTop": "25px"}),
+                    dcc.Graph(figure=fig),
+                    html.P(
+                        "If a file named training_history.csv is uploaded, this plot will automatically update with the real data.",
+                        style={"fontSize": "13px", "fontStyle": "italic"},
+                    ),
+                ]
             )
         )
 
@@ -202,7 +231,6 @@ def render_tab(tab):
 def update_summary(artist, search_query):
     df = data.copy()
 
-    # Apply filters
     if artist:
         df = df[df["Artist"] == artist]
     if search_query:
