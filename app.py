@@ -1,8 +1,9 @@
+import os
 import pandas as pd
 from dash import Dash, dcc, html, Input, Output, dash_table
 import dash_bootstrap_components as dbc
 
-# === Load and clean data ===
+# === Load and clean main dataset ===
 data = pd.read_csv("merged_final_data.csv")
 
 # Clean numeric columns
@@ -25,6 +26,17 @@ data["duration_min"] = data["duration_ms"].apply(
 # Drop missing values
 data = data.dropna(subset=["tempo", "energy"])
 
+# === Optionally load model summary and metrics ===
+model_summary_text = None
+model_metrics = None
+
+if os.path.exists("model_summary.txt"):
+    with open("model_summary.txt", "r") as f:
+        model_summary_text = f.read()
+
+if os.path.exists("model_results.csv"):
+    model_metrics = pd.read_csv("model_results.csv")
+
 # === App setup ===
 app = Dash(__name__, external_stylesheets=[dbc.themes.FLATLY])
 server = app.server
@@ -32,20 +44,11 @@ app.title = "The Science of Song Success"
 
 # === Layout ===
 app.layout = html.Div(
-    style={
-        "backgroundColor": "#fff5f5",
-        "fontFamily": "Open Sans, sans-serif",
-        "padding": "20px",
-    },
+    style={"backgroundColor": "#fff5f5", "fontFamily": "Open Sans, sans-serif", "padding": "20px"},
     children=[
         html.H1(
             "The Science of Song Success",
-            style={
-                "textAlign": "center",
-                "color": "#8B0000",
-                "fontWeight": "bold",
-                "marginBottom": "10px",
-            },
+            style={"textAlign": "center", "color": "#8B0000", "fontWeight": "bold", "marginBottom": "10px"},
         ),
         html.P(
             "For our capstone project, we have built an interactive dashboard to visualize our findings. "
@@ -75,17 +78,12 @@ app.layout = html.Div(
 
         html.Footer(
             "Developed by Team 13 – The Science of Song Success | UC Davis, Fall 2025",
-            style={
-                "textAlign": "center",
-                "color": "#8B0000",
-                "marginTop": "40px",
-                "fontSize": "13px",
-            },
+            style={"textAlign": "center", "color": "#8B0000", "marginTop": "40px", "fontSize": "13px"},
         ),
     ],
 )
 
-# === Tab rendering ===
+# === Tabs rendering ===
 @app.callback(Output("tab-content", "children"), [Input("tabs", "value")])
 def render_tab(tab):
     if tab == "summary":
@@ -119,17 +117,67 @@ def render_tab(tab):
         )
 
     elif tab == "model":
-        return html.Div(
-            [
-                html.H3("Deep Learning Model Overview", style={"color": "#8B0000", "fontWeight": "bold"}),
-                html.P(
-                    "Our model uses audio and engagement features to predict song popularity. "
-                    "We trained it using regression and deep learning architectures to identify the strongest predictors "
-                    "of success across thousands of tracks.",
-                    style={"fontSize": "16px", "maxWidth": "900px"},
-                ),
-            ]
+        # --- Deep Learning Model Section ---
+        content = [
+            html.H3("Deep Learning Model Overview", style={"color": "#8B0000", "fontWeight": "bold"}),
+            html.P(
+                "Our deep learning model was designed to predict song popularity using both Spotify audio features "
+                "and YouTube engagement metrics. It integrates nonlinear relationships through hidden layers to uncover "
+                "patterns in sound characteristics and listener behavior.",
+                style={"fontSize": "16px", "maxWidth": "900px"},
+            ),
+            html.Br(),
+        ]
+
+        # Display model summary if available
+        if model_summary_text:
+            content.append(
+                html.Div(
+                    [
+                        html.H5("Model Architecture", style={"color": "#8B0000"}),
+                        html.Pre(model_summary_text, style={"backgroundColor": "#fff", "padding": "10px", "borderRadius": "8px"}),
+                    ]
+                )
+            )
+        else:
+            content.append(html.P("Model summary not yet uploaded (expected file: model_summary.txt)."))
+
+        # Display metrics if available
+        if model_metrics is not None:
+            content.append(
+                html.Div(
+                    [
+                        html.H5("Performance Metrics", style={"color": "#8B0000"}),
+                        dash_table.DataTable(
+                            model_metrics.to_dict("records"),
+                            [{"name": i, "id": i} for i in model_metrics.columns],
+                            style_table={"overflowX": "auto"},
+                            style_header={
+                                "backgroundColor": "#8B0000",
+                                "color": "white",
+                                "fontWeight": "bold",
+                                "textAlign": "center",
+                            },
+                            style_data={"backgroundColor": "#fffaf9", "border": "1px solid #eee"},
+                        ),
+                    ]
+                )
+            )
+        else:
+            content.append(html.P("Model results not yet uploaded (expected file: model_results.csv)."))
+
+        # Placeholder for future visualizations
+        content.append(
+            html.Div(
+                [
+                    html.H5("Training Visualizations", style={"color": "#8B0000"}),
+                    html.P("Add loss curves, prediction plots, or feature importance here once model outputs are ready."),
+                ],
+                style={"marginTop": "20px"},
+            )
         )
+
+        return html.Div(content)
 
     elif tab == "visuals":
         return html.Div(
@@ -183,11 +231,7 @@ def update_summary(artist, search_query):
                             html.H3(stat["value"], className="card-text"),
                         ]
                     ),
-                    style={
-                        "backgroundColor": "#fff",
-                        "boxShadow": "0 2px 6px rgba(0,0,0,0.1)",
-                        "borderRadius": "10px",
-                    },
+                    style={"backgroundColor": "#fff", "boxShadow": "0 2px 6px rgba(0,0,0,0.1)", "borderRadius": "10px"},
                 ),
                 width=3,
             )
