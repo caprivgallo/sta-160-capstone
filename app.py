@@ -33,51 +33,62 @@ app.layout = html.Div(
     children=[
         html.Div(
             [
-                # ✅ Local UC Davis logo (served from /assets/)
-                html.Img(
-                    src="/assets/ucdavis_logo.png",
-                    style={
-                        "height": "65px",
-                        "display": "block",
-                        "margin": "0 auto 10px auto",
-                    },
-                ),
-                html.H1(
-                    "The Science of Song Success",
-                    style={
-                        "textAlign": "center",
-                        "color": "#8B0000",
-                        "fontWeight": "800",
-                        "fontSize": "36px",
-                        "marginBottom": "5px",
-                    },
-                ),
+                # 🔹 UC Davis seal aligned to left
                 html.Div(
-                    style={
-                        "width": "160px",
-                        "height": "3px",
-                        "backgroundColor": "#C8A200",
-                        "margin": "12px auto 20px auto",
-                        "borderRadius": "2px",
-                    }
+                    html.Img(
+                        src="/assets/ucdavis_logo.png",
+                        style={
+                            "height": "80px",
+                            "float": "left",
+                            "marginRight": "25px",
+                            "marginLeft": "15px",
+                        },
+                    ),
+                    style={"textAlign": "left"},
                 ),
-                html.P(
-                    "For our capstone project, we have built an interactive dashboard to visualize our findings. "
-                    "Our dashboard examines how different Spotify audio features and YouTube engagement metrics "
-                    "relate to one another, and how this relation drives a song's success. Below are several tabs "
-                    "to display simple summary statistics, the deep learning model we trained, and all relevant visuals for this project.",
-                    style={
-                        "textAlign": "center",
-                        "fontSize": "17px",
-                        "maxWidth": "950px",
-                        "margin": "auto",
-                        "lineHeight": "1.6",
-                    },
+
+                # 🔹 Main title & description centered beside logo
+                html.Div(
+                    [
+                        html.H1(
+                            "The Science of Song Success",
+                            style={
+                                "textAlign": "center",
+                                "color": "#8B0000",
+                                "fontWeight": "800",
+                                "fontSize": "36px",
+                                "marginBottom": "8px",
+                            },
+                        ),
+                        html.Div(
+                            style={
+                                "width": "160px",
+                                "height": "3px",
+                                "backgroundColor": "#C8A200",
+                                "margin": "8px auto 15px auto",
+                                "borderRadius": "2px",
+                            }
+                        ),
+                        html.P(
+                            "For our capstone project, we have built an interactive dashboard to visualize our findings. "
+                            "Our dashboard examines how different Spotify audio features and YouTube engagement metrics "
+                            "relate to one another, and how this relation drives a song's success. Below are several tabs "
+                            "to display simple summary statistics, the deep learning model we trained, and all relevant visuals for this project.",
+                            style={
+                                "textAlign": "center",
+                                "fontSize": "17px",
+                                "maxWidth": "950px",
+                                "margin": "auto",
+                                "lineHeight": "1.6",
+                            },
+                        ),
+                    ]
                 ),
+                html.Div(style={"clear": "both"}),  # clears float so layout doesn’t break
             ]
         ),
         html.Br(),
-
+        # (your tabs stay here)
         dcc.Tabs(
             id="tabs",
             value="summary",
