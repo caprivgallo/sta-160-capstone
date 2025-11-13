@@ -1,3 +1,4 @@
+
 import os
 import pandas as pd
 import plotly.express as px
@@ -23,7 +24,6 @@ data["duration_ms"] = pd.to_numeric(data["duration_ms"], errors="coerce")
 data["duration_min"] = data["duration_ms"].apply(
     lambda x: f"{int(x // 60000)}:{int((x % 60000) / 1000):02d}" if pd.notnull(x) else None
 )
-
 data = data.dropna(subset=["tempo", "energy"])
 
 # === Optional model files ===
@@ -58,10 +58,10 @@ app.layout = html.Div(
     children=[
         html.Div(
             [
-html.Img(
-    src="https://upload.wikimedia.org/wikipedia/commons/thumb/9/96/UC_Davis_wordmark.svg/320px-UC_Davis_wordmark.svg.png",
-    style={"height": "60px", "display": "block", "margin": "0 auto 10px auto"},
-),                ),
+                html.Img(
+                    src="https://upload.wikimedia.org/wikipedia/commons/thumb/9/96/UC_Davis_wordmark.svg/320px-UC_Davis_wordmark.svg.png",
+                    style={"height": "60px", "display": "block", "margin": "0 auto 10px auto"},
+                ),
                 html.H1(
                     "The Science of Song Success",
                     style={
@@ -240,7 +240,7 @@ def render_tab(tab):
             ]
         )
 
- elif tab == "team":
+    elif tab == "team":
         return html.Div(
             [
                 html.H3("Team & Acknowledgments", style={"color": "#8B0000", "fontWeight": "bold"}),
@@ -299,6 +299,7 @@ def render_tab(tab):
                 ),
             ]
         )
+
     return html.P("Select a tab to view content.")
 
 # === Summary tab callback ===
@@ -357,6 +358,6 @@ def update_summary(artist, search_query):
 
     return html.Div([cards, html.Br(), table])
 
+
 if __name__ == "__main__":
     app.run_server(debug=True)
-
