@@ -56,10 +56,10 @@ app.layout = html.Div(
     style={"backgroundColor": "#fff5f5", "fontFamily": "Raleway, sans-serif", "padding": "25px"},
     children=[
         html.Div(
-            [
-                html.Img(
-                    src="https://brand.ucdavis.edu/sites/g/files/dgvnsk1546/files/inline-images/wordmark_gold_rgb.png",
-                    style={"height": "60px", "display": "block", "margin": "0 auto 10px auto"},
+            [html.Img(
+    src="https://upload.wikimedia.org/wikipedia/commons/thumb/9/96/UC_Davis_wordmark.svg/512px-UC_Davis_wordmark.svg.png",
+    style={"height": "60px", "display": "block", "margin": "0 auto 10px auto"},
+),
                 ),
                 html.H1(
                     "The Science of Song Success",
