@@ -4,7 +4,7 @@ import plotly.express as px
 from dash import Dash, dcc, html, Input, Output, dash_table
 import dash_bootstrap_components as dbc
 
-# === Load and clean main dataset ===
+# === Load and clean dataset ===
 data = pd.read_csv("merged_final_data.csv")
 
 # Clean numeric columns
@@ -24,10 +24,9 @@ data["duration_min"] = data["duration_ms"].apply(
     lambda x: f"{int(x // 60000)}:{int((x % 60000) / 1000):02d}" if pd.notnull(x) else None
 )
 
-# Drop missing values
 data = data.dropna(subset=["tempo", "energy"])
 
-# === Optionally load model summary and metrics ===
+# === Optional model files ===
 model_summary_text = None
 model_metrics = None
 training_data = None
@@ -42,7 +41,6 @@ if os.path.exists("model_results.csv"):
 if os.path.exists("training_history.csv"):
     training_data = pd.read_csv("training_history.csv")
 else:
-    # Dummy loss curve if no file is uploaded
     training_data = pd.DataFrame({
         "epoch": range(1, 21),
         "loss": [1.0/(i+0.5) + 0.05 for i in range(20)],
@@ -56,24 +54,38 @@ app.title = "The Science of Song Success"
 
 # === Layout ===
 app.layout = html.Div(
-    style={"backgroundColor": "#fff5f5", "fontFamily": "Open Sans, sans-serif", "padding": "20px"},
+    style={"backgroundColor": "#fff5f5", "fontFamily": "Raleway, sans-serif", "padding": "25px"},
     children=[
-        html.H1(
-            "The Science of Song Success",
-            style={"textAlign": "center", "color": "#8B0000", "fontWeight": "bold", "marginBottom": "10px"},
-        ),
-        html.P(
-            "For our capstone project, we have built an interactive dashboard to visualize our findings. "
-            "Our dashboard examines how different Spotify audio features and YouTube engagement metrics "
-            "relate to one another, and how this relation drives a song’s success. Below are several tabs to display "
-            "simple summary statistics, the deep learning model we trained, and all relevant visuals for this project.",
-            style={
-                "textAlign": "center",
-                "fontSize": "16px",
-                "maxWidth": "950px",
-                "margin": "auto",
-                "lineHeight": "1.6",
-            },
+        html.Div(
+            [
+                html.Img(
+                    src="https://upload.wikimedia.org/wikipedia/en/0/05/University_of_California%2C_Davis_wordmark.svg",
+                    style={"height": "60px", "display": "block", "margin": "0 auto 10px auto"},
+                ),
+                html.H1(
+                    "The Science of Song Success",
+                    style={
+                        "textAlign": "center",
+                        "color": "#8B0000",
+                        "fontWeight": "800",
+                        "fontSize": "36px",
+                        "marginBottom": "5px",
+                    },
+                ),
+                html.P(
+                    "For our capstone project, we have built an interactive dashboard to visualize our findings. "
+                    "Our dashboard examines how different Spotify audio features and YouTube engagement metrics "
+                    "relate to one another, and how this relation drives a song’s success. Below are several tabs "
+                    "to display simple summary statistics, the deep learning model we trained, and all relevant visuals for this project.",
+                    style={
+                        "textAlign": "center",
+                        "fontSize": "17px",
+                        "maxWidth": "950px",
+                        "margin": "auto",
+                        "lineHeight": "1.6",
+                    },
+                ),
+            ]
         ),
         html.Br(),
 
@@ -84,12 +96,14 @@ app.layout = html.Div(
                 dcc.Tab(label="Summary Statistics", value="summary", style={"fontWeight": "600"}),
                 dcc.Tab(label="Deep Learning Model", value="model", style={"fontWeight": "600"}),
                 dcc.Tab(label="Visuals", value="visuals", style={"fontWeight": "600"}),
+                dcc.Tab(label="Presentation", value="presentation", style={"fontWeight": "600"}),
+                dcc.Tab(label="Team & Acknowledgments", value="team", style={"fontWeight": "600"}),
             ],
         ),
-        html.Div(id="tab-content", style={"padding": "20px"}),
+        html.Div(id="tab-content", style={"padding": "25px"}),
 
         html.Footer(
-            "Developed by Team 13 – The Science of Song Success | UC Davis, Fall 2025",
+            "Developed by Team 13 — The Science of Song Success | UC Davis Fall 2025",
             style={"textAlign": "center", "color": "#8B0000", "marginTop": "40px", "fontSize": "13px"},
         ),
     ],
@@ -129,19 +143,17 @@ def render_tab(tab):
         )
 
     elif tab == "model":
-        # --- Deep Learning Model Section ---
         content = [
             html.H3("Deep Learning Model Overview", style={"color": "#8B0000", "fontWeight": "bold"}),
             html.P(
                 "Our deep learning model was designed to predict song popularity using both Spotify audio features "
-                "and YouTube engagement metrics. It integrates nonlinear relationships through hidden layers to uncover "
-                "patterns in sound characteristics and listener behavior.",
+                "and YouTube engagement metrics. It captures nonlinear relationships between sound characteristics "
+                "and listener behavior.",
                 style={"fontSize": "16px", "maxWidth": "900px"},
             ),
             html.Br(),
         ]
 
-        # Model summary
         if model_summary_text:
             content.append(
                 html.Div(
@@ -152,9 +164,8 @@ def render_tab(tab):
                 )
             )
         else:
-            content.append(html.P("Model summary not yet uploaded (expected file: model_summary.txt)."))
+            content.append(html.P("Model summary not yet uploaded (expected: model_summary.txt)."))
 
-        # Model metrics
         if model_metrics is not None:
             content.append(
                 html.Div(
@@ -164,21 +175,13 @@ def render_tab(tab):
                             model_metrics.to_dict("records"),
                             [{"name": i, "id": i} for i in model_metrics.columns],
                             style_table={"overflowX": "auto"},
-                            style_header={
-                                "backgroundColor": "#8B0000",
-                                "color": "white",
-                                "fontWeight": "bold",
-                                "textAlign": "center",
-                            },
+                            style_header={"backgroundColor": "#8B0000", "color": "white", "fontWeight": "bold"},
                             style_data={"backgroundColor": "#fffaf9", "border": "1px solid #eee"},
                         ),
                     ]
                 )
             )
-        else:
-            content.append(html.P("Model results not yet uploaded (expected file: model_results.csv)."))
 
-        # --- Add training visualization (Loss Curve) ---
         fig = px.line(
             training_data,
             x="epoch",
@@ -190,7 +193,7 @@ def render_tab(tab):
             plot_bgcolor="#fffaf9",
             paper_bgcolor="#fffaf9",
             title_font_color="#8B0000",
-            font={"family": "Open Sans"},
+            font={"family": "Raleway"},
         )
 
         content.append(
@@ -199,13 +202,12 @@ def render_tab(tab):
                     html.H5("Training Visualizations", style={"color": "#8B0000", "marginTop": "25px"}),
                     dcc.Graph(figure=fig),
                     html.P(
-                        "If a file named training_history.csv is uploaded, this plot will automatically update with the real data.",
+                        "This plot will automatically update if training_history.csv is uploaded.",
                         style={"fontSize": "13px", "fontStyle": "italic"},
                     ),
                 ]
             )
         )
-
         return html.Div(content)
 
     elif tab == "visuals":
@@ -213,15 +215,82 @@ def render_tab(tab):
             [
                 html.H3("Visuals and Data Exploration", style={"color": "#8B0000", "fontWeight": "bold"}),
                 html.P(
-                    "This section will include interactive charts, scatterplots, and correlation heatmaps "
-                    "showing the relationships between song features and performance metrics.",
+                    "This section will include interactive charts and correlation visualizations showing relationships between song features and popularity metrics.",
                     style={"fontSize": "16px", "maxWidth": "900px"},
                 ),
             ]
         )
 
-    return html.P("Select a tab to view content.")
+    elif tab == "presentation":
+        return html.Div(
+            [
+                html.H3("Capstone Video Presentation", style={"color": "#8B0000", "fontWeight": "bold"}),
+                html.P(
+                    "Our final video presentation will appear here soon. "
+                    "This section will include our recorded explanation of the project, methodology, and results.",
+                    style={"fontSize": "16px", "maxWidth": "900px"},
+                ),
+                html.Div(
+                    html.P(
+                        "Stay tuned for the video upload closer to our final submission!",
+                        style={"fontStyle": "italic", "color": "#a33"},
+                    ),
+                    style={"marginTop": "30px", "textAlign": "center"},
+                ),
+            ]
+        )
 
+    elif tab == "team":
+        return html.Div(
+            [
+                html.H3("Team & Acknowledgments", style={"color": "#8B0000", "fontWeight": "bold"}),
+                html.Br(),
+                dbc.Row(
+                    [
+                        dbc.Col(
+                            dbc.Card(
+                                dbc.CardBody(
+                                    [
+                                        html.H5("Capri Gallo", className="card-title", style={"color": "#8B0000"}),
+                                        html.P("B.S. Statistical Data Science  |  University of California, Davis (2026)"),
+                                    ]
+                                ),
+                                style={"backgroundColor": "#fff", "boxShadow": "0 2px 6px rgba(0,0,0,0.1)"},
+                            ),
+                            width=4,
+                        ),
+                        dbc.Col(
+                            dbc.Card(
+                                dbc.CardBody(
+                                    [
+                                        html.H5("Team Members", className="card-title", style={"color": "#8B0000"}),
+                                        html.P("Additional contributors and collaborators for STA 160 Capstone Project."),
+                                    ]
+                                ),
+                                style={"backgroundColor": "#fff", "boxShadow": "0 2px 6px rgba(0,0,0,0.1)"},
+                            ),
+                            width=4,
+                        ),
+                        dbc.Col(
+                            dbc.Card(
+                                dbc.CardBody(
+                                    [
+                                        html.H5("Acknowledgments", className="card-title", style={"color": "#8B0000"}),
+                                        html.P("Special thanks to Professor Duncan Temple Lang and the UC Davis Statistics Department for their guidance."),
+                                    ]
+                                ),
+                                style={"backgroundColor": "#fff", "boxShadow": "0 2px 6px rgba(0,0,0,0.1)"},
+                            ),
+                            width=4,
+                        ),
+                    ],
+                    className="g-4",
+                    justify="center",
+                ),
+            ]
+        )
+
+    return html.P("Select a tab to view content.")
 
 # === Summary tab callback ===
 @app.callback(
@@ -230,7 +299,6 @@ def render_tab(tab):
 )
 def update_summary(artist, search_query):
     df = data.copy()
-
     if artist:
         df = df[df["Artist"] == artist]
     if search_query:
@@ -241,7 +309,6 @@ def update_summary(artist, search_query):
             | df["Artist"].str.lower().str.contains(search_query, na=False)
         ]
 
-    # Summary cards
     stats = [
         {"label": "Songs", "value": len(df)},
         {"label": "Avg Tempo (BPM)", "value": f"{df['tempo'].mean():.1f}"},
@@ -255,8 +322,8 @@ def update_summary(artist, search_query):
                 dbc.Card(
                     dbc.CardBody(
                         [
-                            html.H5(stat["label"], className="card-title", style={"color": "#8B0000"}),
-                            html.H3(stat["value"], className="card-text"),
+                            html.H5(stat["label"], style={"color": "#8B0000"}),
+                            html.H3(stat["value"]),
                         ]
                     ),
                     style={"backgroundColor": "#fff", "boxShadow": "0 2px 6px rgba(0,0,0,0.1)", "borderRadius": "10px"},
@@ -268,17 +335,11 @@ def update_summary(artist, search_query):
         className="g-3",
     )
 
-    # Interactive data table
     table = dash_table.DataTable(
         df[["filename", "duration_min", "tempo", "loudness", "energy", "Views", "Likes"]].to_dict("records"),
-        [{"name": col, "id": col} for col in ["filename", "duration_min", "tempo", "loudness", "energy", "Views", "Likes"]],
+        [{"name": c, "id": c} for c in ["filename", "duration_min", "tempo", "loudness", "energy", "Views", "Likes"]],
         style_table={"overflowX": "auto", "marginTop": "25px"},
-        style_header={
-            "backgroundColor": "#8B0000",
-            "color": "white",
-            "fontWeight": "bold",
-            "textAlign": "center",
-        },
+        style_header={"backgroundColor": "#8B0000", "color": "white", "fontWeight": "bold", "textAlign": "center"},
         style_data={"backgroundColor": "#fffaf9", "border": "1px solid #eee"},
         sort_action="native",
         filter_action="native",
@@ -287,6 +348,6 @@ def update_summary(artist, search_query):
 
     return html.Div([cards, html.Br(), table])
 
-
 if __name__ == "__main__":
     app.run_server(debug=True)
+
