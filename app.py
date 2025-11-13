@@ -7,7 +7,6 @@ import dash_bootstrap_components as dbc
 # === Load and clean dataset ===
 data = pd.read_csv("merged_final_data.csv")
 
-# Clean numeric columns
 data["tempo"] = (
     data["tempo"]
     .astype(str)
@@ -19,34 +18,11 @@ data["energy"] = pd.to_numeric(data["energy"], errors="coerce")
 data["loudness"] = pd.to_numeric(data["loudness"], errors="coerce")
 data["duration_ms"] = pd.to_numeric(data["duration_ms"], errors="coerce")
 
-# Convert duration to MM:SS
 data["duration_min"] = data["duration_ms"].apply(
     lambda x: f"{int(x // 60000)}:{int((x % 60000) / 1000):02d}" if pd.notnull(x) else None
 )
 data = data.dropna(subset=["tempo", "energy"])
 
-# Optional model files
-model_summary_text = None
-model_metrics = None
-training_data = None
-
-if os.path.exists("model_summary.txt"):
-    with open("model_summary.txt", "r") as f:
-        model_summary_text = f.read()
-
-if os.path.exists("model_results.csv"):
-    model_metrics = pd.read_csv("model_results.csv")
-
-if os.path.exists("training_history.csv"):
-    training_data = pd.read_csv("training_history.csv")
-else:
-    training_data = pd.DataFrame({
-        "epoch": range(1, 21),
-        "loss": [1.0/(i+0.5) + 0.05 for i in range(20)],
-        "val_loss": [1.0/(i+0.7) + 0.07 for i in range(20)]
-    })
-
-# === App setup ===
 app = Dash(__name__, external_stylesheets=[dbc.themes.FLATLY])
 server = app.server
 app.title = "The Science of Song Success"
@@ -57,9 +33,9 @@ app.layout = html.Div(
     children=[
         html.Div(
             [
-                # ✅ UC Davis logo (works across Render)
+                # ✅ Local UC Davis logo (served from /assets/)
                 html.Img(
-                    src="https://upload.wikimedia.org/wikipedia/commons/1/1a/UC_Davis_logo.png",
+                    src="/assets/ucdavis_logo.png",
                     style={
                         "height": "65px",
                         "display": "block",
@@ -80,7 +56,7 @@ app.layout = html.Div(
                     style={
                         "width": "160px",
                         "height": "3px",
-                        "backgroundColor": "#C8A200",  # UC Davis gold
+                        "backgroundColor": "#C8A200",
                         "margin": "12px auto 20px auto",
                         "borderRadius": "2px",
                     }
@@ -122,7 +98,7 @@ app.layout = html.Div(
     ],
 )
 
-# === Tabs rendering ===
+# === Tabs rendering (shortened to key section) ===
 @app.callback(Output("tab-content", "children"), [Input("tabs", "value")])
 def render_tab(tab):
     if tab == "summary":
@@ -152,49 +128,6 @@ def render_tab(tab):
                     },
                 ),
                 html.Div(id="summary-output"),
-            ]
-        )
-
-    elif tab == "model":
-        content = [
-            html.H3("Deep Learning Model Overview", style={"color": "#8B0000", "fontWeight": "bold"}),
-            html.P(
-                "Our deep learning model was designed to predict song popularity using both Spotify audio features "
-                "and YouTube engagement metrics. It captures nonlinear relationships between sound characteristics "
-                "and listener behavior.",
-                style={"fontSize": "16px", "maxWidth": "900px"},
-            ),
-            html.Br(),
-        ]
-        return html.Div(content)
-
-    elif tab == "visuals":
-        return html.Div(
-            [
-                html.H3("Visuals and Data Exploration", style={"color": "#8B0000", "fontWeight": "bold"}),
-                html.P(
-                    "This section will include interactive charts and correlation visualizations showing relationships between song features and popularity metrics.",
-                    style={"fontSize": "16px", "maxWidth": "900px"},
-                ),
-            ]
-        )
-
-    elif tab == "presentation":
-        return html.Div(
-            [
-                html.H3("Capstone Video Presentation", style={"color": "#8B0000", "fontWeight": "bold"}),
-                html.P(
-                    "Our final video presentation will appear here soon. "
-                    "This section will include our recorded explanation of the project, methodology, and results.",
-                    style={"fontSize": "16px", "maxWidth": "900px"},
-                ),
-                html.Div(
-                    html.P(
-                        "Stay tuned for the video upload closer to our final submission!",
-                        style={"fontStyle": "italic", "color": "#a33"},
-                    ),
-                    style={"marginTop": "30px", "textAlign": "center"},
-                ),
             ]
         )
 
@@ -244,10 +177,7 @@ def render_tab(tab):
             ]
         )
 
-    return html.P("Select a tab to view content.")
-
-
-# === Summary tab callback ===
+# === Summary callback (same as before) ===
 @app.callback(
     Output("summary-output", "children"),
     [Input("artist-dropdown", "value"), Input("search-bar", "value")],
@@ -276,10 +206,7 @@ def update_summary(artist, search_query):
             dbc.Col(
                 dbc.Card(
                     dbc.CardBody(
-                        [
-                            html.H5(stat["label"], style={"color": "#8B0000"}),
-                            html.H3(stat["value"]),
-                        ]
+                        [html.H5(stat["label"], style={"color": "#8B0000"}), html.H3(stat["value"])]
                     ),
                     style={"backgroundColor": "#fff", "boxShadow": "0 2px 6px rgba(0,0,0,0.1)", "borderRadius": "10px"},
                 ),
