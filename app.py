@@ -57,10 +57,14 @@ app.layout = html.Div(
     children=[
         html.Div(
             [
-                # ✅ UC Davis logo (works on Render)
+                # ✅ UC Davis logo (works across Render)
                 html.Img(
-                    src="https://upload.wikimedia.org/wikipedia/commons/thumb/9/96/UC_Davis_wordmark.svg/512px-UC_Davis_wordmark.svg.png",
-                    style={"height": "60px", "display": "block", "margin": "0 auto 10px auto"},
+                    src="https://upload.wikimedia.org/wikipedia/commons/1/1a/UC_Davis_logo.png",
+                    style={
+                        "height": "65px",
+                        "display": "block",
+                        "margin": "0 auto 10px auto",
+                    },
                 ),
                 html.H1(
                     "The Science of Song Success",
@@ -71,6 +75,15 @@ app.layout = html.Div(
                         "fontSize": "36px",
                         "marginBottom": "5px",
                     },
+                ),
+                html.Div(
+                    style={
+                        "width": "160px",
+                        "height": "3px",
+                        "backgroundColor": "#C8A200",  # UC Davis gold
+                        "margin": "12px auto 20px auto",
+                        "borderRadius": "2px",
+                    }
                 ),
                 html.P(
                     "For our capstone project, we have built an interactive dashboard to visualize our findings. "
@@ -153,61 +166,6 @@ def render_tab(tab):
             ),
             html.Br(),
         ]
-
-        if model_summary_text:
-            content.append(
-                html.Div(
-                    [
-                        html.H5("Model Architecture", style={"color": "#8B0000"}),
-                        html.Pre(model_summary_text, style={"backgroundColor": "#fff", "padding": "10px", "borderRadius": "8px"}),
-                    ]
-                )
-            )
-        else:
-            content.append(html.P("Model summary not yet uploaded (expected: model_summary.txt)."))
-
-        if model_metrics is not None:
-            content.append(
-                html.Div(
-                    [
-                        html.H5("Performance Metrics", style={"color": "#8B0000"}),
-                        dash_table.DataTable(
-                            model_metrics.to_dict("records"),
-                            [{"name": i, "id": i} for i in model_metrics.columns],
-                            style_table={"overflowX": "auto"},
-                            style_header={"backgroundColor": "#8B0000", "color": "white", "fontWeight": "bold"},
-                            style_data={"backgroundColor": "#fffaf9", "border": "1px solid #eee"},
-                        ),
-                    ]
-                )
-            )
-
-        fig = px.line(
-            training_data,
-            x="epoch",
-            y=["loss", "val_loss"],
-            labels={"value": "Loss", "epoch": "Epoch", "variable": "Type"},
-            title="Training and Validation Loss Curve",
-        )
-        fig.update_layout(
-            plot_bgcolor="#fffaf9",
-            paper_bgcolor="#fffaf9",
-            title_font_color="#8B0000",
-            font={"family": "Raleway"},
-        )
-
-        content.append(
-            html.Div(
-                [
-                    html.H5("Training Visualizations", style={"color": "#8B0000", "marginTop": "25px"}),
-                    dcc.Graph(figure=fig),
-                    html.P(
-                        "This plot will automatically update if training_history.csv is uploaded.",
-                        style={"fontSize": "13px", "fontStyle": "italic"},
-                    ),
-                ]
-            )
-        )
         return html.Div(content)
 
     elif tab == "visuals":
