@@ -1,4 +1,3 @@
-
 import os
 import pandas as pd
 import plotly.express as px
@@ -26,7 +25,7 @@ data["duration_min"] = data["duration_ms"].apply(
 )
 data = data.dropna(subset=["tempo", "energy"])
 
-# === Optional model files ===
+# Optional model files
 model_summary_text = None
 model_metrics = None
 training_data = None
@@ -59,7 +58,7 @@ app.layout = html.Div(
         html.Div(
             [
                 html.Img(
-                    src="https://upload.wikimedia.org/wikipedia/commons/thumb/9/96/UC_Davis_wordmark.svg/320px-UC_Davis_wordmark.svg.png",
+                    src="https://brand.ucdavis.edu/sites/g/files/dgvnsk1546/files/inline-images/wordmark_gold_rgb.png",
                     style={"height": "60px", "display": "block", "margin": "0 auto 10px auto"},
                 ),
                 html.H1(
@@ -75,7 +74,7 @@ app.layout = html.Div(
                 html.P(
                     "For our capstone project, we have built an interactive dashboard to visualize our findings. "
                     "Our dashboard examines how different Spotify audio features and YouTube engagement metrics "
-                    "relate to one another, and how this relation drives a song’s success. Below are several tabs "
+                    "relate to one another, and how this relation drives a song's success. Below are several tabs "
                     "to display simple summary statistics, the deep learning model we trained, and all relevant visuals for this project.",
                     style={
                         "textAlign": "center",
@@ -243,64 +242,51 @@ def render_tab(tab):
     elif tab == "team":
         return html.Div(
             [
-                html.H3("Team & Acknowledgments", style={"color": "#8B0000", "fontWeight": "bold"}),
+                html.H3("Team & Acknowledgments", style={"color": "#8B0000", "fontWeight": "bold", "textAlign": "center"}),
                 html.Br(),
+                html.H5("Team Members", style={"color": "#8B0000", "textAlign": "center", "marginBottom": "25px"}),
+
                 dbc.Row(
                     [
-                        dbc.Col(
-                            dbc.Card(
-                                dbc.CardBody(
-                                    [
-                                        html.H5("Capri Gallo", className="card-title", style={"color": "#8B0000"}),
-                                        html.P("B.S. Statistical Data Science | University of California, Davis (2026)"),
-                                    ]
+                        *[
+                            dbc.Col(
+                                dbc.Card(
+                                    dbc.CardBody(
+                                        [
+                                            html.H5(name, className="card-title", style={"color": "#8B0000"}),
+                                            html.P(
+                                                "B.S. Statistical Data Science | University of California, Davis (2026)",
+                                                style={"fontSize": "15px"},
+                                            ),
+                                        ]
+                                    ),
+                                    style={
+                                        "backgroundColor": "#fff",
+                                        "boxShadow": "0 2px 8px rgba(0,0,0,0.1)",
+                                        "borderRadius": "10px",
+                                        "textAlign": "center",
+                                    },
                                 ),
-                                style={"backgroundColor": "#fff", "boxShadow": "0 2px 6px rgba(0,0,0,0.1)"},
-                            ),
-                            width=4,
-                        ),
-                        dbc.Col(
-                            dbc.Card(
-                                dbc.CardBody(
-                                    [
-                                        html.H5("Team Members", className="card-title", style={"color": "#8B0000"}),
-                                        html.Ul(
-                                            [
-                                                html.Li("Alex Garcia"),
-                                                html.Li("Rohan Pillay"),
-                                                html.Li("Edward Ron"),
-                                                html.Li("Yuxiao Tan"),
-                                            ]
-                                        ),
-                                        html.P("B.S. Statistical Data Science | University of California, Davis (2026)"),
-                                    ]
-                                ),
-                                style={"backgroundColor": "#fff", "boxShadow": "0 2px 6px rgba(0,0,0,0.1)"},
-                            ),
-                            width=4,
-                        ),
-                        dbc.Col(
-                            dbc.Card(
-                                dbc.CardBody(
-                                    [
-                                        html.H5("Acknowledgments", className="card-title", style={"color": "#8B0000"}),
-                                        html.P(
-                                            "Special thanks to Professor Lingfei Cui and the UC Davis Statistics Department for their guidance and support throughout this project."
-                                        ),
-                                    ]
-                                ),
-                                style={"backgroundColor": "#fff", "boxShadow": "0 2px 6px rgba(0,0,0,0.1)"},
-                            ),
-                            width=4,
-                        ),
+                                width=3,
+                            )
+                            for name in ["Capri Gallo", "Alex Garcia", "Rohan Pillay", "Edward Ron", "Yuxiao Tan"]
+                        ]
                     ],
                     className="g-4",
                     justify="center",
+                ),
+
+                html.Br(),
+                html.H5("Acknowledgments", style={"color": "#8B0000", "textAlign": "center"}),
+                html.P(
+                    "Special thanks to Professor Lingfei Cui and the UC Davis Statistics Department for their guidance and support throughout this project.",
+                    style={"textAlign": "center", "maxWidth": "800px", "margin": "auto"},
                 ),
             ]
         )
 
     return html.P("Select a tab to view content.")
+
 
 # === Summary tab callback ===
 @app.callback(
