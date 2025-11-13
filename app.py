@@ -58,10 +58,10 @@ app.layout = html.Div(
     children=[
         html.Div(
             [
-                html.Img(
-                    src="https://upload.wikimedia.org/wikipedia/en/0/05/University_of_California%2C_Davis_wordmark.svg",
-                    style={"height": "60px", "display": "block", "margin": "0 auto 10px auto"},
-                ),
+html.Img(
+    src="https://upload.wikimedia.org/wikipedia/commons/thumb/9/96/UC_Davis_wordmark.svg/320px-UC_Davis_wordmark.svg.png",
+    style={"height": "60px", "display": "block", "margin": "0 auto 10px auto"},
+),                ),
                 html.H1(
                     "The Science of Song Success",
                     style={
@@ -240,7 +240,7 @@ def render_tab(tab):
             ]
         )
 
-    elif tab == "team":
+ elif tab == "team":
         return html.Div(
             [
                 html.H3("Team & Acknowledgments", style={"color": "#8B0000", "fontWeight": "bold"}),
@@ -252,7 +252,7 @@ def render_tab(tab):
                                 dbc.CardBody(
                                     [
                                         html.H5("Capri Gallo", className="card-title", style={"color": "#8B0000"}),
-                                        html.P("B.S. Statistical Data Science  |  University of California, Davis (2026)"),
+                                        html.P("B.S. Statistical Data Science | University of California, Davis (2026)"),
                                     ]
                                 ),
                                 style={"backgroundColor": "#fff", "boxShadow": "0 2px 6px rgba(0,0,0,0.1)"},
@@ -264,7 +264,15 @@ def render_tab(tab):
                                 dbc.CardBody(
                                     [
                                         html.H5("Team Members", className="card-title", style={"color": "#8B0000"}),
-                                        html.P("Additional contributors and collaborators for STA 160 Capstone Project."),
+                                        html.Ul(
+                                            [
+                                                html.Li("Alex Garcia"),
+                                                html.Li("Rohan Pillay"),
+                                                html.Li("Edward Ron"),
+                                                html.Li("Yuxiao Tan"),
+                                            ]
+                                        ),
+                                        html.P("B.S. Statistical Data Science | University of California, Davis (2026)"),
                                     ]
                                 ),
                                 style={"backgroundColor": "#fff", "boxShadow": "0 2px 6px rgba(0,0,0,0.1)"},
@@ -276,7 +284,9 @@ def render_tab(tab):
                                 dbc.CardBody(
                                     [
                                         html.H5("Acknowledgments", className="card-title", style={"color": "#8B0000"}),
-                                        html.P("Special thanks to Professor Duncan Temple Lang and the UC Davis Statistics Department for their guidance."),
+                                        html.P(
+                                            "Special thanks to Professor Lingfei Cui and the UC Davis Statistics Department for their guidance and support throughout this project."
+                                        ),
                                     ]
                                 ),
                                 style={"backgroundColor": "#fff", "boxShadow": "0 2px 6px rgba(0,0,0,0.1)"},
@@ -289,7 +299,6 @@ def render_tab(tab):
                 ),
             ]
         )
-
     return html.P("Select a tab to view content.")
 
 # === Summary tab callback ===
