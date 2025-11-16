@@ -21,7 +21,7 @@ artist_options = [{"label": artist, "value": artist} for artist in sorted(clean_
 
 # --- Initialize app ---
 app = Dash(__name__, suppress_callback_exceptions=True)
-app.title = "Music Insights Dashboard"
+app.title = "Music Analytics Dashboard"
 
 # --- App layout ---
 app.layout = html.Div(
@@ -61,7 +61,7 @@ app.layout = html.Div(
                 dcc.Tab(label="Summary Statistics", value="summary"),
                 dcc.Tab(label="Deep Learning Model", value="model"),
                 dcc.Tab(label="Visuals", value="visuals"),
-                dcc.Tab(label="Final Report Summary", value="report"),  # NEW TAB
+                dcc.Tab(label="Final Report Summary", value="report"),
                 dcc.Tab(label="Team & Acknowledgments", value="team"),
             ],
         ),
@@ -113,15 +113,66 @@ def render_tab(tab):
             [
                 html.H2("Final Report Summary", style={"color": "#b32020"}),
                 html.P(
-                    """
-                    This section summarizes the complete report for our capstone project,
-                    covering the motivation, data preparation, modeling approaches, and findings.
-                    Detailed discussions of each method, including statistical analysis, model tuning,
-                    and validation steps, are documented in the full paper version.
-                    """,
+                    "Below is a condensed overview of our capstone project's final report. "
+                    "Each section summarizes the main ideas, findings, and lessons learned. "
+                    "Once the written report is finalized, this section will include the full executive summary.",
                     style={"fontSize": "17px", "lineHeight": "1.7"},
                 ),
-            ]
+                html.H3("1. Motivation", style={"color": "#b32020"}),
+                html.P(
+                    "Our project aims to understand the factors that drive a song’s success by analyzing "
+                    "Spotify audio features and YouTube engagement metrics.",
+                    style={"fontSize": "16px", "lineHeight": "1.7"},
+                ),
+                html.H3("2. Data Collection & Processing", style={"color": "#b32020"}),
+                html.P(
+                    "The dataset combines Spotify track-level audio data with YouTube video statistics from Rohit Grewal’s Kaggle dataset. "
+                    "After cleaning and merging, we analyzed over 5,000 songs.",
+                    style={"fontSize": "16px", "lineHeight": "1.7"},
+                ),
+                html.H3("3. Modeling Approach", style={"color": "#b32020"}),
+                html.P(
+                    "We developed multiple models, including regression and a deep learning neural network, "
+                    "to predict song popularity based on key features.",
+                    style={"fontSize": "16px", "lineHeight": "1.7"},
+                ),
+                html.H3("4. Key Findings", style={"color": "#b32020"}),
+                html.P(
+                    "Our findings indicate that energy, tempo, and loudness correlate strongly with listener engagement. "
+                    "Songs with balanced acoustic features—moderate loudness, high energy, and mid-range tempo—perform better on YouTube.",
+                    style={"fontSize": "16px", "lineHeight": "1.7"},
+                ),
+                html.H3("5. Conclusions & Future Work", style={"color": "#b32020"}),
+                html.P(
+                    "This project demonstrates how quantitative analysis can reveal patterns in music success. "
+                    "Future work may include genre-based modeling, sentiment analysis of lyrics, and integration of streaming trends over time.",
+                    style={"fontSize": "16px", "lineHeight": "1.7"},
+                ),
+                html.Div(
+                    [
+                        html.A(
+                            "📄 Download Full Report (PDF)",
+                            href="https://drive.google.com/your-final-report-link-here",
+                            target="_blank",
+                            style={
+                                "backgroundColor": "#b32020",
+                                "color": "white",
+                                "padding": "10px 20px",
+                                "borderRadius": "8px",
+                                "textDecoration": "none",
+                                "fontWeight": "bold",
+                            },
+                        )
+                    ],
+                    style={"textAlign": "center", "marginTop": "25px"},
+                ),
+            ],
+            style={
+                "backgroundColor": "white",
+                "padding": "25px",
+                "borderRadius": "10px",
+                "boxShadow": "0px 2px 6px rgba(0,0,0,0.1)",
+            },
         )
 
     elif tab == "team":
@@ -180,7 +231,6 @@ def render_tab(tab):
                 ),
             ]
         )
-
 
 # --- Run app ---
 if __name__ == "__main__":
