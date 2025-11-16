@@ -3,8 +3,6 @@ from dash import Dash, dcc, html, Input, Output, dash_table
 
 # --- Load and clean data ---
 data = pd.read_csv("merged_final_data.csv")
-
-# Clean tempo column (remove brackets, convert to float)
 data["tempo"] = (
     data["tempo"]
     .astype(str)
@@ -16,14 +14,13 @@ data["energy"] = pd.to_numeric(data["energy"], errors="coerce")
 data["duration_ms"] = data["duration_ms"].apply(lambda x: round(x / 60000, 2))
 clean_data = data.dropna(subset=["tempo", "energy"])
 
-# --- Create dropdown options ---
 artist_options = [{"label": artist, "value": artist} for artist in sorted(clean_data["Artist"].dropna().unique())]
 
 # --- Initialize app ---
 app = Dash(__name__, suppress_callback_exceptions=True)
-app.title = "Music Analytics Dashboard"
+app.title = "The Science of Song Success"
 
-# --- App layout ---
+# --- Layout ---
 app.layout = html.Div(
     style={
         "backgroundColor": "#faf7f7",
@@ -32,25 +29,46 @@ app.layout = html.Div(
         "color": "#222",
     },
     children=[
-        # Header
+        # Header section
         html.Div(
-            style={"display": "flex", "alignItems": "center", "justifyContent": "space-between"},
+            style={
+                "display": "flex",
+                "alignItems": "center",
+                "justifyContent": "space-between",
+                "marginBottom": "15px",
+            },
             children=[
-                html.H1("🎶 Music Analytics & Insights", style={"color": "#b32020", "fontSize": "36px"}),
-                html.Img(src="/assets/ucdavis_logo.png", style={"height": "70px", "marginLeft": "15px"}),
+                html.Img(src="/assets/ucdavis_logo.png", style={"height": "70px"}),
+                html.H1(
+                    "The Science of Song Success",
+                    style={
+                        "color": "#b32020",
+                        "fontSize": "36px",
+                        "textAlign": "center",
+                        "flex": "1",
+                        "fontWeight": "bold",
+                    },
+                ),
             ],
         ),
-        html.Hr(style={"borderTop": "3px solid #b32020"}),
-
+        html.Div(
+            style={
+                "borderBottom": "3px solid #b32020",
+                "width": "200px",
+                "margin": "0 auto",
+                "marginBottom": "20px",
+            }
+        ),
         html.P(
             """
-            For our capstone project, we have built an interactive dashboard to visualize our findings.
-            Our dashboard examines how different Spotify audio features and YouTube engagement metrics relate to one another,
-            and how this relation drives a song's success. Below are several tabs to display simple summary statistics,
-            the deep learning model we trained, and all relevant visuals for this project.
+            For our capstone project, we have built an interactive dashboard to visualize our findings. 
+            Our dashboard examines how different Spotify audio features and YouTube engagement metrics relate to one another, 
+            and how these relationships drive a song's success. Below are several tabs displaying summary statistics, 
+            our deep learning model, visual results, and our final report.
             """,
-            style={"fontSize": "18px", "lineHeight": "1.6"},
+            style={"fontSize": "18px", "textAlign": "center", "lineHeight": "1.7"},
         ),
+        html.Br(),
 
         # Tabs
         dcc.Tabs(
@@ -69,22 +87,51 @@ app.layout = html.Div(
     ],
 )
 
-# --- Callbacks for tabs ---
+# --- Tab callback ---
 @app.callback(Output("tabs-content", "children"), Input("tabs", "value"))
 def render_tab(tab):
     if tab == "summary":
         return html.Div(
             [
                 html.H2("Summary Statistics", style={"color": "#b32020"}),
-                html.Label("Select an Artist:"),
+                html.P(
+                    """
+                    This section provides descriptive summaries of our dataset. 
+                    You can filter by artist to view individual statistics or browse overall averages below.
+                    The following variables describe key audio and engagement metrics:
+                    """,
+                    style={"fontSize": "16px", "marginBottom": "10px"},
+                ),
+                html.Ul(
+                    [
+                        html.Li("🎵 **Tempo (BPM)** – The overall speed or pace of a song, measured in beats per minute."),
+                        html.Li("⚡ **Energy** – A measure of intensity and activity, from calm (0.0) to energetic (1.0)."),
+                        html.Li("🔊 **Loudness (dB)** – Average decibel level; louder tracks typically sound more powerful."),
+                        html.Li("📏 **Duration (min)** – The song length converted from milliseconds."),
+                        html.Li("👀 **Views, Likes, Comments** – YouTube engagement metrics reflecting listener interaction."),
+                    ],
+                    style={"fontSize": "15px", "marginBottom": "25px", "lineHeight": "1.8"},
+                ),
+                html.Label("Filter by Artist:"),
                 dcc.Dropdown(id="artist-dropdown", options=artist_options, placeholder="Select an artist"),
                 html.Br(),
                 dash_table.DataTable(
                     id="summary-table",
-                    columns=[{"name": col, "id": col} for col in ["Artist", "Views", "Likes", "Comments", "tempo", "energy", "duration_ms"]],
+                    columns=[
+                        {"name": col, "id": col}
+                        for col in ["Artist", "Views", "Likes", "Comments", "tempo", "energy", "duration_ms"]
+                    ],
                     style_table={"overflowX": "auto"},
-                    style_header={"backgroundColor": "#b32020", "color": "white", "fontWeight": "bold"},
-                    style_data={"backgroundColor": "white", "color": "black", "border": "1px solid #ddd"},
+                    style_header={
+                        "backgroundColor": "#b32020",
+                        "color": "white",
+                        "fontWeight": "bold",
+                    },
+                    style_data={
+                        "backgroundColor": "white",
+                        "color": "black",
+                        "border": "1px solid #ddd",
+                    },
                 ),
             ]
         )
@@ -94,8 +141,18 @@ def render_tab(tab):
             [
                 html.H2("Deep Learning Model Overview", style={"color": "#b32020"}),
                 html.P(
-                    "This section presents the architecture, training results, and evaluation metrics of our deep learning model.",
-                    style={"fontSize": "17px"},
+                    """
+                    This section summarizes our deep learning model trained to predict song success metrics 
+                    (like views and likes) based on Spotify audio features. 
+                    We compared multiple architectures and observed that including features like energy and danceability 
+                    improved predictive accuracy significantly.
+                    """,
+                    style={"fontSize": "17px", "lineHeight": "1.7"},
+                ),
+                html.Br(),
+                html.P(
+                    "Future work includes expanding the model with natural language processing on song lyrics and release trends.",
+                    style={"fontSize": "16px"},
                 ),
             ]
         )
@@ -104,75 +161,126 @@ def render_tab(tab):
         return html.Div(
             [
                 html.H2("Visualizations", style={"color": "#b32020"}),
-                html.P("Interactive plots and feature comparisons will be displayed here.", style={"fontSize": "17px"}),
+                html.P(
+                    "Interactive charts will be showcased here, illustrating correlations between Spotify features and YouTube engagement metrics.",
+                    style={"fontSize": "17px"},
+                ),
             ]
         )
 
     elif tab == "report":
         return html.Div(
-            [
-                html.H2("Final Report Summary", style={"color": "#b32020"}),
-                html.P(
-                    "Below is a condensed overview of our capstone project's final report. "
-                    "Each section summarizes the main ideas, findings, and lessons learned. "
-                    "Once the written report is finalized, this section will include the full executive summary.",
-                    style={"fontSize": "17px", "lineHeight": "1.7"},
-                ),
-                html.H3("1. Motivation", style={"color": "#b32020"}),
-                html.P(
-                    "Our project aims to understand the factors that drive a song’s success by analyzing "
-                    "Spotify audio features and YouTube engagement metrics.",
-                    style={"fontSize": "16px", "lineHeight": "1.7"},
-                ),
-                html.H3("2. Data Collection & Processing", style={"color": "#b32020"}),
-                html.P(
-                    "The dataset combines Spotify track-level audio data with YouTube video statistics from Rohit Grewal’s Kaggle dataset. "
-                    "After cleaning and merging, we analyzed over 5,000 songs.",
-                    style={"fontSize": "16px", "lineHeight": "1.7"},
-                ),
-                html.H3("3. Modeling Approach", style={"color": "#b32020"}),
-                html.P(
-                    "We developed multiple models, including regression and a deep learning neural network, "
-                    "to predict song popularity based on key features.",
-                    style={"fontSize": "16px", "lineHeight": "1.7"},
-                ),
-                html.H3("4. Key Findings", style={"color": "#b32020"}),
-                html.P(
-                    "Our findings indicate that energy, tempo, and loudness correlate strongly with listener engagement. "
-                    "Songs with balanced acoustic features—moderate loudness, high energy, and mid-range tempo—perform better on YouTube.",
-                    style={"fontSize": "16px", "lineHeight": "1.7"},
-                ),
-                html.H3("5. Conclusions & Future Work", style={"color": "#b32020"}),
-                html.P(
-                    "This project demonstrates how quantitative analysis can reveal patterns in music success. "
-                    "Future work may include genre-based modeling, sentiment analysis of lyrics, and integration of streaming trends over time.",
-                    style={"fontSize": "16px", "lineHeight": "1.7"},
+            style={"display": "flex", "gap": "30px"},
+            children=[
+                html.Div(
+                    [
+                        html.H3("Sections", style={"color": "#b32020"}),
+                        html.Ul(
+                            [
+                                html.Li(html.A("1. Motivation", href="#motivation")),
+                                html.Li(html.A("2. Data & Processing", href="#data")),
+                                html.Li(html.A("3. Modeling", href="#modeling")),
+                                html.Li(html.A("4. Key Findings", href="#findings")),
+                                html.Li(html.A("5. Conclusions", href="#conclusions")),
+                            ],
+                            style={"lineHeight": "2"},
+                        ),
+                    ],
+                    style={"width": "20%", "backgroundColor": "#f9f9f9", "padding": "15px", "borderRadius": "8px"},
                 ),
                 html.Div(
                     [
-                        html.A(
-                            "📄 Download Full Report (PDF)",
-                            href="https://drive.google.com/your-final-report-link-here",
-                            target="_blank",
-                            style={
-                                "backgroundColor": "#b32020",
-                                "color": "white",
-                                "padding": "10px 20px",
-                                "borderRadius": "8px",
-                                "textDecoration": "none",
-                                "fontWeight": "bold",
-                            },
-                        )
+                        html.H2("Final Report Summary", style={"color": "#b32020"}),
+                        html.P(
+                            "This section provides an overview of our capstone report. Use the navigation menu on the left to explore each part.",
+                            style={"fontSize": "16px"},
+                        ),
+                        html.Div(
+                            id="motivation",
+                            children=[
+                                html.H3("1. Motivation", style={"color": "#b32020"}),
+                                html.P(
+                                    "Our goal was to understand the measurable patterns behind musical popularity. "
+                                    "By combining Spotify and YouTube data, we aimed to uncover data-driven explanations for success.",
+                                    style={"fontSize": "16px"},
+                                ),
+                            ],
+                        ),
+                        html.Div(
+                            id="data",
+                            children=[
+                                html.H3("2. Data Collection & Processing", style={"color": "#b32020"}),
+                                html.P(
+                                    "We compiled over 5,000 songs, merging Spotify track metadata and YouTube video analytics. "
+                                    "Cleaning steps removed duplicates, standardized durations, and ensured consistent variable formats.",
+                                    style={"fontSize": "16px"},
+                                ),
+                            ],
+                        ),
+                        html.Div(
+                            id="modeling",
+                            children=[
+                                html.H3("3. Modeling Approach", style={"color": "#b32020"}),
+                                html.P(
+                                    "Our deep learning model predicts engagement using acoustic features. "
+                                    "We also compared regression and random forest models to interpret key predictors.",
+                                    style={"fontSize": "16px"},
+                                ),
+                            ],
+                        ),
+                        html.Div(
+                            id="findings",
+                            children=[
+                                html.H3("4. Key Findings", style={"color": "#b32020"}),
+                                html.P(
+                                    "Songs with balanced loudness and strong rhythmic consistency performed best. "
+                                    "Energy and danceability were the most influential predictors of engagement.",
+                                    style={"fontSize": "16px"},
+                                ),
+                            ],
+                        ),
+                        html.Div(
+                            id="conclusions",
+                            children=[
+                                html.H3("5. Conclusions & Future Work", style={"color": "#b32020"}),
+                                html.P(
+                                    "This project demonstrates how statistical and deep learning techniques can analyze creative success quantitatively. "
+                                    "Future directions include sentiment analysis of lyrics and time-based trend modeling.",
+                                    style={"fontSize": "16px"},
+                                ),
+                            ],
+                        ),
+                        html.Br(),
+                        html.Div(
+                            [
+                                html.A(
+                                    "📄 Download Full Report (PDF)",
+                                    href="https://drive.google.com/your-final-report-link-here",
+                                    target="_blank",
+                                    style={
+                                        "backgroundColor": "#b32020",
+                                        "color": "white",
+                                        "padding": "10px 20px",
+                                        "borderRadius": "8px",
+                                        "textDecoration": "none",
+                                        "fontWeight": "bold",
+                                    },
+                                )
+                            ],
+                            style={"textAlign": "center"},
+                        ),
                     ],
-                    style={"textAlign": "center", "marginTop": "25px"},
+                    style={
+                        "width": "80%",
+                        "backgroundColor": "white",
+                        "padding": "25px",
+                        "borderRadius": "10px",
+                        "overflowY": "auto",
+                        "maxHeight": "600px",
+                        "boxShadow": "0px 2px 6px rgba(0,0,0,0.1)",
+                    },
                 ),
             ],
-            style={
-                "backgroundColor": "white",
-                "padding": "25px",
-                "borderRadius": "10px",
-                "boxShadow": "0px 2px 6px rgba(0,0,0,0.1)",
-            },
         )
 
     elif tab == "team":
@@ -183,38 +291,38 @@ def render_tab(tab):
                     [
                         html.Div(
                             [
-                                html.H4("Capri Gallo", style={"marginBottom": "0"}),
-                                html.P("Statistical Data Science, UC Davis"),
+                                html.H4("Capri Gallo"),
+                                html.P("B.S. Statistical Data Science | University of California, Davis (2026)"),
                             ],
-                            style={"padding": "10px", "backgroundColor": "white", "borderRadius": "10px", "margin": "5px"},
+                            style={"backgroundColor": "white", "padding": "15px", "borderRadius": "10px", "margin": "10px"},
                         ),
                         html.Div(
                             [
-                                html.H4("Alex Garcia", style={"marginBottom": "0"}),
-                                html.P("Statistical Data Science, UC Davis"),
+                                html.H4("Alex Garcia"),
+                                html.P("B.S. Statistical Data Science | University of California, Davis (2026)"),
                             ],
-                            style={"padding": "10px", "backgroundColor": "white", "borderRadius": "10px", "margin": "5px"},
+                            style={"backgroundColor": "white", "padding": "15px", "borderRadius": "10px", "margin": "10px"},
                         ),
                         html.Div(
                             [
-                                html.H4("Rohan Pillay", style={"marginBottom": "0"}),
-                                html.P("Statistical Data Science, UC Davis"),
+                                html.H4("Rohan Pillay"),
+                                html.P("B.S. Statistical Data Science | University of California, Davis (2026)"),
                             ],
-                            style={"padding": "10px", "backgroundColor": "white", "borderRadius": "10px", "margin": "5px"},
+                            style={"backgroundColor": "white", "padding": "15px", "borderRadius": "10px", "margin": "10px"},
                         ),
                         html.Div(
                             [
-                                html.H4("Edward Ron", style={"marginBottom": "0"}),
-                                html.P("Statistical Data Science, UC Davis"),
+                                html.H4("Edward Ron"),
+                                html.P("B.S. Statistical Data Science | University of California, Davis (2026)"),
                             ],
-                            style={"padding": "10px", "backgroundColor": "white", "borderRadius": "10px", "margin": "5px"},
+                            style={"backgroundColor": "white", "padding": "15px", "borderRadius": "10px", "margin": "10px"},
                         ),
                         html.Div(
                             [
-                                html.H4("Yuxiao Tan", style={"marginBottom": "0"}),
-                                html.P("Statistical Data Science, UC Davis"),
+                                html.H4("Yuxiao Tan"),
+                                html.P("B.S. Statistical Data Science | University of California, Davis (2026)"),
                             ],
-                            style={"padding": "10px", "backgroundColor": "white", "borderRadius": "10px", "margin": "5px"},
+                            style={"backgroundColor": "white", "padding": "15px", "borderRadius": "10px", "margin": "10px"},
                         ),
                     ],
                     style={"display": "flex", "flexWrap": "wrap"},
@@ -222,12 +330,18 @@ def render_tab(tab):
                 html.Br(),
                 html.H3("Acknowledgments", style={"color": "#b32020"}),
                 html.P("Special thanks to Professor Lingfei Cui and the UC Davis Statistics Department for their guidance."),
+                html.Br(),
                 html.H3("References", style={"color": "#b32020"}),
                 html.Ul(
                     [
-                        html.Li("Li, Y. et al. (2024). MERT: Acoustic Music Understanding Model with Large-Scale Self-Supervised Training. *arXiv:2306.00107*."),
-                        html.Li("Grewal, R. (2025). Spotify–YouTube Data. *Kaggle*. https://www.kaggle.com/datasets/rohitgrewal/spotify-youtube-data"),
-                    ]
+                        html.Li(
+                            "Li, Y. et al. (2024). MERT: Acoustic Music Understanding Model with Large-Scale Self-Supervised Training. arXiv:2306.00107."
+                        ),
+                        html.Li(
+                            "Grewal, R. (2025). Spotify–YouTube Data. Kaggle. https://www.kaggle.com/datasets/rohitgrewal/spotify-youtube-data"
+                        ),
+                    ],
+                    style={"fontSize": "15px", "lineHeight": "1.8"},
                 ),
             ]
         )
