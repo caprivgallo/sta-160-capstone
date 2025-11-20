@@ -38,6 +38,19 @@ server = app.server    # <-- REQUIRED FOR RENDER
 app.title = "The Science of Song Success"
 
 # ============================
+# HELPER FOR TEAM CARDS
+# ============================
+def card():
+    return {
+        "backgroundColor": "white",
+        "padding": "15px",
+        "borderRadius": "10px",
+        "margin": "10px",
+        "boxShadow": "0 2px 5px rgba(0,0,0,0.1)",
+        "width": "250px",
+    }
+
+# ============================
 # LAYOUT
 # ============================
 app.layout = html.Div(
@@ -170,7 +183,7 @@ def render_tab(selected):
                 dcc.Input(
                     id="search-input",
                     type="text",
-                    placeholder="Type song or album name...",
+                    placeholder="Type song, album, or keyword...",
                     style={"width": "100%", "padding": "10px"},
                 ),
                 html.Br(),
@@ -199,9 +212,7 @@ def render_tab(selected):
             ]
         )
 
-    # ------------------------------------------
     # MODEL TAB
-    # ------------------------------------------
     elif selected == "model":
         return html.Div(
             [
@@ -217,9 +228,7 @@ def render_tab(selected):
             ]
         )
 
-    # ------------------------------------------
     # VISUALS TAB
-    # ------------------------------------------
     elif selected == "visuals":
         return html.Div(
             [
@@ -231,19 +240,62 @@ def render_tab(selected):
             ]
         )
 
-    # ------------------------------------------
-    # FINAL REPORT SUMMARY TAB
-    # ------------------------------------------
+    # FINAL REPORT TAB
     elif selected == "report":
         return html.Div(
             [
                 html.H2("Final Report Summary", style={"color": "#0b2f59"}),
+
+                html.H3("Abstract", style={"color": "#0b2f59"}),
                 html.P(
                     """
-                    This section contains a summary of our full written report, including 
-                    motivation, methodology, modeling approach, and key findings.
+                    Our project explores how Spotify audio features and YouTube engagement signals 
+                    jointly predict a song’s popularity. Using integrated datasets and a deep 
+                    learning model, we identify key acoustic and listener-behavior patterns that 
+                    correlate with high-performing tracks.
                     """,
-                    style={"fontSize": "17px"},
+                    style={"fontSize": "16px"},
+                ),
+
+                html.H3("Motivation", style={"color": "#0b2f59"}),
+                html.P(
+                    """
+                    We aim to understand why some songs succeed while others fail in the modern 
+                    streaming ecosystem. With millions of tracks released each year, a data-driven 
+                    approach helps uncover quantifiable factors behind success.
+                    """,
+                    style={"fontSize": "16px"},
+                ),
+
+                html.H3("Methodology", style={"color": "#0b2f59"}),
+                html.P(
+                    """
+                    We merged Spotify musical attributes with YouTube viewership metrics, cleaned 
+                    the combined dataset, and applied exploratory analysis and model-based 
+                    predictions. Our deep learning model used audio features as inputs to predict 
+                    viewer engagement.
+                    """,
+                    style={"fontSize": "16px"},
+                ),
+
+                html.H3("Preliminary Findings", style={"color": "#0b2f59"}),
+                html.P(
+                    """
+                    Songs with consistent rhythm (steady tempo), moderate loudness, and higher 
+                    energy tended to attract more engagement. Visualizations also show clusters 
+                    that differentiate high-performing tracks from the rest.
+                    """,
+                    style={"fontSize": "16px"},
+                ),
+
+                html.H3("Next Steps", style={"color": "#0b2f59"}),
+                html.P(
+                    """
+                    We are finalizing model evaluation, interpretation, and conclusions. The full 
+                    written report, including detailed methods, visualizations, and statistical 
+                    discussion, is linked below.
+                    """,
+                    style={"fontSize": "16px"},
                 ),
 
                 html.Br(),
@@ -267,9 +319,7 @@ def render_tab(selected):
             ]
         )
 
-    # ------------------------------------------
-    # TEAM & REFERENCES TAB
-    # ------------------------------------------
+    # TEAM TAB
     elif selected == "team":
         return html.Div(
             [
@@ -278,77 +328,28 @@ def render_tab(selected):
                 html.Div(
                     style={"display": "flex", "flexWrap": "wrap"},
                     children=[
-                        html.Div(
-                            [
-                                html.H4("Capri Gallo"),
-                                html.P("B.S. Statistical Data Science, UC Davis (2026)"),
-                            ],
-                            style=card(),
-                        ),
-                        html.Div(
-                            [
-                                html.H4("Alex Garcia"),
-                                html.P("B.S. Statistical Data Science, UC Davis (2026)"),
-                            ],
-                            style=card(),
-                        ),
-                        html.Div(
-                            [
-                                html.H4("Rohan Pillay"),
-                                html.P("B.S. Statistical Data Science, UC Davis (2026)"),
-                            ],
-                            style=card(),
-                        ),
-                        html.Div(
-                            [
-                                html.H4("Edward Ron"),
-                                html.P("B.S. Statistical Data Science, UC Davis (2026)"),
-                            ],
-                            style=card(),
-                        ),
-                        html.Div(
-                            [
-                                html.H4("Yuxiao Tan"),
-                                html.P("B.S. Statistical Data Science, UC Davis (2026)"),
-                            ],
-                            style=card(),
-                        ),
+                        html.Div([html.H4("Capri Gallo"), html.P("B.S. Statistical Data Science, UC Davis (2026)")], style=card()),
+                        html.Div([html.H4("Alex Garcia"), html.P("B.S. Statistical Data Science, UC Davis (2026)")], style=card()),
+                        html.Div([html.H4("Rohan Pillay"), html.P("B.S. Statistical Data Science, UC Davis (2026)")], style=card()),
+                        html.Div([html.H4("Edward Ron"), html.P("B.S. Statistical Data Science, UC Davis (2026)")], style=card()),
+                        html.Div([html.H4("Yuxiao Tan"), html.P("B.S. Statistical Data Science, UC Davis (2026)")], style=card()),
                     ],
                 ),
 
                 html.Br(),
                 html.H3("Acknowledgments", style={"color": "#0b2f59"}),
-                html.P(
-                    "Special thanks to Professor Lingfei Cui and the UC Davis Statistics Department for their guidance."
-                ),
+                html.P("Special thanks to Professor Lingfei Cui and the UC Davis Statistics Department for their guidance."),
 
                 html.Br(),
                 html.H3("References", style={"color": "#0b2f59"}),
                 html.Ul(
                     [
-                        html.Li(
-                            "Li, Y. et al. (2024). MERT: Acoustic Music Understanding Model with "
-                            "Large-Scale Self-Supervised Training. arXiv:2306.00107."
-                        ),
-                        html.Li(
-                            "Grewal, R. (2025). Spotify–YouTube Data. Kaggle. "
-                            "https://www.kaggle.com/datasets/rohitgrewal/spotify-youtube-data"
-                        ),
+                        html.Li("Li, Y. et al. (2024). MERT: Acoustic Music Understanding Model with Large-Scale Self-Supervised Training. arXiv:2306.00107."),
+                        html.Li("Grewal, R. (2025). Spotify–YouTube Data. Kaggle. https://www.kaggle.com/datasets/rohitgrewal/spotify-youtube-data"),
                     ]
                 ),
             ]
         )
-
-# Helper for team cards
-def card():
-    return {
-        "backgroundColor": "white",
-        "padding": "15px",
-        "borderRadius": "10px",
-        "margin": "10px",
-        "boxShadow": "0 2px 5px rgba(0,0,0,0.1)",
-        "width": "250px",
-    }
 
 # ============================
 # CALLBACK FOR TABLE FILTERING
@@ -360,12 +361,16 @@ def card():
 def update_table(selected_artist, search_text):
     df = clean_data.copy()
 
+    # Filter by artist
     if selected_artist:
         df = df[df["Artist"] == selected_artist]
 
+    # GLOBAL SEARCH ACROSS ALL STRING COLUMNS
     if search_text and search_text.strip():
         search = search_text.lower()
-        df = df[df["filename"].str.lower().str.contains(search, na=False)]
+        string_cols = df.select_dtypes(include="object").columns
+        mask = df[string_cols].apply(lambda col: col.str.lower().str.contains(search, na=False))
+        df = df[mask.any(axis=1)]
 
     return df.to_dict("records")
 
