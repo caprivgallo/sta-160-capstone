@@ -1,12 +1,13 @@
 import pandas as pd
 from dash import Dash, dcc, html, Input, Output, dash_table
 
-# ============================
-# LOAD + CLEAN DATA
-# ============================
+# =========================================================
+# LOAD & CLEAN DATA
+# =========================================================
+
 data = pd.read_csv("merged_final_data.csv")
 
-# tempo cleanup
+# Clean tempo values
 data["tempo"] = (
     data["tempo"]
     .astype(str)
@@ -15,31 +16,30 @@ data["tempo"] = (
     .astype(float)
 )
 
-# numeric fields
+# Ensure numeric fields
 data["energy"] = pd.to_numeric(data["energy"], errors="coerce")
 
-# convert duration_ms → minutes
+# Convert duration_ms → minutes
 data["duration_min"] = (data["duration_ms"] / 60000).round(2)
 
-# remove missing
+# Remove missing rows
 clean_data = data.dropna(subset=["tempo", "energy"])
 
-# dropdown artists
+# Dropdown options
 artist_options = [
     {"label": artist, "value": artist}
     for artist in sorted(clean_data["Artist"].dropna().unique())
 ]
 
-# ============================
-# DASH APP
-# ============================
+# =========================================================
+# DASH APP SETUP
+# =========================================================
+
 app = Dash(__name__, suppress_callback_exceptions=True)
-server = app.server    # <-- REQUIRED FOR RENDER
+server = app.server  # Required for Render
 app.title = "The Science of Song Success"
 
-# ============================
-# HELPER FOR TEAM CARDS
-# ============================
+# Helper: Team member card style
 def card():
     return {
         "backgroundColor": "white",
@@ -50,9 +50,10 @@ def card():
         "width": "250px",
     }
 
-# ============================
+# =========================================================
 # LAYOUT
-# ============================
+# =========================================================
+
 app.layout = html.Div(
     style={
         "backgroundColor": "#faf7f7",
@@ -61,7 +62,7 @@ app.layout = html.Div(
         "color": "#1a1a1a",
     },
     children=[
-        # HEADER
+        # ---------------- HEADER ----------------
         html.Div(
             style={
                 "display": "flex",
@@ -111,7 +112,7 @@ app.layout = html.Div(
             },
         ),
 
-        # ------------------ TABS ------------------
+        # ---------------- TABS ----------------
         dcc.Tabs(
             id="tabs",
             value="summary",
@@ -124,11 +125,11 @@ app.layout = html.Div(
                 dcc.Tab(label="Team & Acknowledgments", value="team"),
             ],
         ),
-        html.Div(id="tabs-content"),
 
+        html.Div(id="tabs-content"),
         html.Br(),
 
-        # FOOTER
+        # --------------- FOOTER ----------------
         html.Footer(
             "Developed by Team 13 — STA 160 Capstone | UC Davis, Fall 2025",
             style={
@@ -143,30 +144,34 @@ app.layout = html.Div(
     ],
 )
 
-# ============================
-# TAB CALLBACK
-# ============================
+# =========================================================
+# TAB CALLBACK — CONTENT FOR EACH TAB
+# =========================================================
+
 @app.callback(
     Output("tabs-content", "children"),
     Input("tabs", "value")
 )
 def render_tab(selected):
 
-    # ------------------------------------------
+    # ------------------------------------------------------
     # SUMMARY STATISTICS TAB
-    # ------------------------------------------
+    # ------------------------------------------------------
     if selected == "summary":
         return html.Div(
             [
                 html.H2("Summary Statistics", style={"color": "#0b2f59"}),
+
                 html.P(
                     """
                     Below are descriptive summaries of key Spotify and YouTube variables:
-                     • tempo — speed of a track in beats per minute (BPM)
-                     • energy — measure of intensity (0 to 1)
-                     • loudness — volume of track in decibels (dB)
-                     • duration_min — length of track in minutes
+                     • tempo — beats per minute (BPM), describing rhythmic speed  
+                     • energy — musical intensity on a 0–1 scale  
+                     • loudness — average decibel level of the track  
+                     • duration_min — track length in minutes  
                      • views, likes, comments — listener engagement on YouTube  
+
+                    Use the filters below to explore trends across 5,000+ songs.
                     """,
                     style={"whiteSpace": "pre-line", "fontSize": "16px"},
                 ),
@@ -186,8 +191,7 @@ def render_tab(selected):
                     placeholder="Type song, album, or keyword...",
                     style={"width": "100%", "padding": "10px"},
                 ),
-                html.Br(),
-                html.Br(),
+                html.Br(), html.Br(),
 
                 dash_table.DataTable(
                     id="summary-table",
@@ -212,94 +216,158 @@ def render_tab(selected):
             ]
         )
 
+    # ------------------------------------------------------
     # MODEL TAB
+    # ------------------------------------------------------
     elif selected == "model":
         return html.Div(
             [
                 html.H2("Deep Learning Model Overview", style={"color": "#0b2f59"}),
+
                 html.P(
                     """
-                    This section summarizes the architecture and training results of our deep 
-                    learning model. It analyzes how well the model predicts popularity metrics 
-                    based on audio features and discusses opportunities for improvement.
+                    This section summarizes the design, evaluation, and performance of our 
+                    deep learning model. The model uses Spotify acoustic features—including 
+                    danceability, energy, tempo, and valence—to predict YouTube engagement 
+                    metrics such as views, likes, and comments.
+
+                    After extensive tuning and feature engineering, our models achieved:
+
+                    • Popularity Model → R² ≈ 0.656, MAE ≈ 5.02  
+                    • Marketability Model → R² ≈ 0.698, MAE ≈ 2.02  
+
+                    Engagement-driven models produced the strongest predictive power,
+                    reflecting modern music consumption dynamics.
                     """,
-                    style={"fontSize": "17px"},
+                    style={"fontSize": "17px", "whiteSpace": "pre-line"},
                 ),
             ]
         )
 
+    # ------------------------------------------------------
     # VISUALS TAB
+    # ------------------------------------------------------
     elif selected == "visuals":
         return html.Div(
             [
                 html.H2("Visualizations", style={"color": "#0b2f59"}),
                 html.P(
-                    "Interactive plots will appear here.",
-                    style={"fontSize": "17px"},
+                    """
+                    Interactive plots will appear here, including:
+
+                    • Relationships between acoustic features  
+                    • Engagement vs. audio-feature comparisons  
+                    • Clustering and similarity structures  
+                    """,
+                    style={"fontSize": "17px", "whiteSpace": "pre-line"},
                 ),
             ]
         )
 
-    # FINAL REPORT TAB
+    # ------------------------------------------------------
+    # FINAL REPORT SUMMARY TAB (UPDATED)
+    # ------------------------------------------------------
     elif selected == "report":
         return html.Div(
             [
                 html.H2("Final Report Summary", style={"color": "#0b2f59"}),
 
+                # ABSTRACT
                 html.H3("Abstract", style={"color": "#0b2f59"}),
                 html.P(
                     """
-                    Our project explores how Spotify audio features and YouTube engagement signals 
-                    jointly predict a song’s popularity. Using integrated datasets and a deep 
-                    learning model, we identify key acoustic and listener-behavior patterns that 
-                    correlate with high-performing tracks.
+                    Our project analyzes a combined Spotify–YouTube dataset to identify the musical 
+                    and engagement features that best predict song popularity. The dataset integrates 
+                    Spotify audio attributes (such as danceability, energy, tempo, and valence) with 
+                    YouTube metrics (views, likes, comments), enabling both exploratory and predictive modeling. 
+                    Our final models demonstrate strong predictive power, and the dashboard provides 
+                    actionable insights for artists, producers, and record labels.
                     """,
                     style={"fontSize": "16px"},
                 ),
 
+                # MOTIVATION
                 html.H3("Motivation", style={"color": "#0b2f59"}),
                 html.P(
                     """
-                    We aim to understand why some songs succeed while others fail in the modern 
-                    streaming ecosystem. With millions of tracks released each year, a data-driven 
-                    approach helps uncover quantifiable factors behind success.
+                    In an industry driven by streaming algorithms, understanding the components of 
+                    song popularity is essential. By integrating musical structure with listener 
+                    behavior, we aimed to identify what characteristics help songs succeed across 
+                    major streaming platforms. Our core research question was:
+
+                    “What song-level features best predict popularity, and how can predictive modeling 
+                    support decision-making in the music industry?”
                     """,
-                    style={"fontSize": "16px"},
+                    style={"fontSize": "16px", "whiteSpace": "pre-line"},
                 ),
 
+                # METHODOLOGY
                 html.H3("Methodology", style={"color": "#0b2f59"}),
                 html.P(
                     """
-                    We merged Spotify musical attributes with YouTube viewership metrics, cleaned 
-                    the combined dataset, and applied exploratory analysis and model-based 
-                    predictions. Our deep learning model used audio features as inputs to predict 
-                    viewer engagement.
+                    We combined Spotify audio features with YouTube engagement data and performed:
+
+                    • Extensive data cleaning  
+                    • Exploratory data analysis  
+                    • Regression, LASSO, and model selection  
+                    • Deep learning model development  
+                    • Feature engineering (interactions, embeddings, scaled variables)  
+                    • Similarity and clustering analysis  
+
+                    This framework ensured interpretability, predictive accuracy, and scalability.
                     """,
-                    style={"fontSize": "16px"},
+                    style={"fontSize": "16px", "whiteSpace": "pre-line"},
                 ),
 
-                html.H3("Preliminary Findings", style={"color": "#0b2f59"}),
+                # RESULTS
+                html.H3("Results", style={"color": "#0b2f59"}),
                 html.P(
                     """
-                    Songs with consistent rhythm (steady tempo), moderate loudness, and higher 
-                    energy tended to attract more engagement. Visualizations also show clusters 
-                    that differentiate high-performing tracks from the rest.
+                    Two major predictive models were developed:
+
+                    • Popularity Model → R² ≈ 0.656, MAE ≈ 5.02  
+                    • Marketability Model → R² ≈ 0.698, MAE ≈ 2.02  
+
+                    Engagement metrics produced the strongest signals, but audio features—especially 
+                    energy, tempo, and danceability—were still significant contributors.
+
+                    The hybrid similarity matrix revealed structured clusters of songs that share both 
+                    acoustic and engagement characteristics.
                     """,
-                    style={"fontSize": "16px"},
+                    style={"fontSize": "16px", "whiteSpace": "pre-line"},
                 ),
 
-                html.H3("Next Steps", style={"color": "#0b2f59"}),
+                # INTERPRETATION
+                html.H3("Interpretation", style={"color": "#0b2f59"}),
                 html.P(
                     """
-                    We are finalizing model evaluation, interpretation, and conclusions. The full 
-                    written report, including detailed methods, visualizations, and statistical 
-                    discussion, is linked below.
+                    Engagement signals dominated prediction, demonstrating the power of consumer behavior 
+                    in shaping music success. However, audio features added valuable nuance, showing that 
+                    musical structure influences how listeners interact with songs.
+
+                    Songs with consistent rhythm, moderate loudness, and high energy performed noticeably 
+                    better across metrics.
                     """,
-                    style={"fontSize": "16px"},
+                    style={"fontSize": "16px", "whiteSpace": "pre-line"},
+                ),
+
+                # CONCLUSION
+                html.H3("Conclusion", style={"color": "#0b2f59"}),
+                html.P(
+                    """
+                    Our modeling framework effectively captures both musical characteristics and listener 
+                    behavior. The models we developed provide practical insights for forecasting song 
+                    performance and strengthening data-driven decision-making in the modern music industry.
+
+                    A full version of the report—including extended methodology, visualizations, and 
+                    discussion—is available below.
+                    """,
+                    style={"fontSize": "16px", "whiteSpace": "pre-line"},
                 ),
 
                 html.Br(),
 
+                # FULL REPORT LINK
                 html.Div(
                     html.A(
                         "📄 View Full Final Report (Google Doc)",
@@ -319,7 +387,9 @@ def render_tab(selected):
             ]
         )
 
-    # TEAM TAB
+    # ------------------------------------------------------
+    # TEAM & ACKNOWLEDGMENTS TAB
+    # ------------------------------------------------------
     elif selected == "team":
         return html.Div(
             [
@@ -328,32 +398,58 @@ def render_tab(selected):
                 html.Div(
                     style={"display": "flex", "flexWrap": "wrap"},
                     children=[
-                        html.Div([html.H4("Capri Gallo"), html.P("B.S. Statistical Data Science, UC Davis (2026)")], style=card()),
-                        html.Div([html.H4("Alex Garcia"), html.P("B.S. Statistical Data Science, UC Davis (2026)")], style=card()),
-                        html.Div([html.H4("Rohan Pillay"), html.P("B.S. Statistical Data Science, UC Davis (2026)")], style=card()),
-                        html.Div([html.H4("Edward Ron"), html.P("B.S. Statistical Data Science, UC Davis (2026)")], style=card()),
-                        html.Div([html.H4("Yuxiao Tan"), html.P("B.S. Statistical Data Science, UC Davis (2026)")], style=card()),
+                        html.Div(
+                            [html.H4("Capri Gallo"), html.P("B.S. Statistical Data Science, UC Davis (2026)")],
+                            style=card(),
+                        ),
+                        html.Div(
+                            [html.H4("Alex Garcia"), html.P("B.S. Statistical Data Science, UC Davis (2026)")],
+                            style=card(),
+                        ),
+                        html.Div(
+                            [html.H4("Rohan Pillay"), html.P("B.S. Statistical Data Science, UC Davis (2026)")],
+                            style=card(),
+                        ),
+                        html.Div(
+                            [html.H4("Edward Ron"), html.P("B.S. Statistical Data Science, UC Davis (2026)")],
+                            style=card(),
+                        ),
+                        html.Div(
+                            [html.H4("Yuxiao Tan"), html.P("B.S. Statistical Data Science, UC Davis (2026)")],
+                            style=card(),
+                        ),
                     ],
                 ),
 
                 html.Br(),
                 html.H3("Acknowledgments", style={"color": "#0b2f59"}),
-                html.P("Special thanks to Professor Lingfei Cui and the UC Davis Statistics Department for their guidance."),
+                html.P(
+                    "Special thanks to Professor Lingfei Cui and the UC Davis Statistics Department "
+                    "for their guidance throughout this project."
+                ),
 
                 html.Br(),
                 html.H3("References", style={"color": "#0b2f59"}),
                 html.Ul(
                     [
-                        html.Li("Li, Y. et al. (2024). MERT: Acoustic Music Understanding Model with Large-Scale Self-Supervised Training. arXiv:2306.00107."),
-                        html.Li("Grewal, R. (2025). Spotify–YouTube Data. Kaggle. https://www.kaggle.com/datasets/rohitgrewal/spotify-youtube-data"),
+                        html.Li(
+                            "Li, Y. et al. (2024). MERT: Acoustic Music Understanding Model with Large-Scale "
+                            "Self-Supervised Training. arXiv:2306.00107."
+                        ),
+                        html.Li(
+                            "Grewal, R. (2025). Spotify–YouTube Data. Kaggle. "
+                            "https://www.kaggle.com/datasets/rohitgrewal/spotify-youtube-data"
+                        ),
                     ]
                 ),
             ]
         )
 
-# ============================
-# CALLBACK FOR TABLE FILTERING
-# ============================
+
+# =========================================================
+# CALLBACK: FILTERING FOR SUMMARY TABLE
+# =========================================================
+
 @app.callback(
     Output("summary-table", "data"),
     [Input("artist-dropdown", "value"), Input("search-input", "value")]
@@ -361,22 +457,27 @@ def render_tab(selected):
 def update_table(selected_artist, search_text):
     df = clean_data.copy()
 
-    # Filter by artist
+    # Filter by selected artist
     if selected_artist:
         df = df[df["Artist"] == selected_artist]
 
-    # GLOBAL SEARCH ACROSS ALL STRING COLUMNS
+    # Global text search across all string columns
     if search_text and search_text.strip():
         search = search_text.lower()
         string_cols = df.select_dtypes(include="object").columns
-        mask = df[string_cols].apply(lambda col: col.str.lower().str.contains(search, na=False))
+        mask = df[string_cols].apply(
+            lambda col: col.str.lower().str.contains(search, na=False)
+        )
         df = df[mask.any(axis=1)]
 
     return df.to_dict("records")
 
 
-# ============================
+# =========================================================
 # RUN APP
-# ============================
+# =========================================================
+
 if __name__ == "__main__":
     app.run(debug=True)
+
+
