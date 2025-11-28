@@ -2,7 +2,7 @@ import pandas as pd
 from dash import Dash, dcc, html, Input, Output, dash_table
 
 # =========================================================
-# LOAD & CLEAN DATA
+# LOAD & CLEAN DATA  (SUMMARY TAB)
 # =========================================================
 
 data = pd.read_csv("merged_final_data.csv")
@@ -25,11 +25,33 @@ data["duration_min"] = (data["duration_ms"] / 60000).round(2)
 # Remove missing rows
 clean_data = data.dropna(subset=["tempo", "energy"])
 
-# Dropdown options
+# Dropdown options for SUMMARY tab
 artist_options = [
     {"label": artist, "value": artist}
     for artist in sorted(clean_data["Artist"].dropna().unique())
 ]
+
+# =========================================================
+# LOAD MODEL DATA (PREDICTIONS FOR DEEP LEARNING TAB)
+# =========================================================
+
+# CSV without embeddings, but WITH Predicted_Popularity & Predicted_Marketability
+model_data = pd.read_csv("merged_no_embeddings.csv")
+
+# Dropdown options for MODEL tab (artists)
+model_artist_options = [
+    {"label": artist, "value": artist}
+    for artist in sorted(model_data["Artist"].dropna().unique())
+]
+
+# Dropdown options for MODEL tab (albums) – only if column exists
+if "Album" in model_data.columns:
+    model_album_options = [
+        {"label": album, "value": album}
+        for album in sorted(model_data["Album"].dropna().unique())
+    ]
+else:
+    model_album_options = []
 
 # =========================================================
 # DASH APP SETUP
@@ -217,7 +239,7 @@ def render_tab(selected):
         )
 
     # ------------------------------------------------------
-    # MODEL TAB
+    # MODEL TAB  (OVERVIEW + DROPDOWNS + TABLE OF PREDICTIONS)
     # ------------------------------------------------------
     elif selected == "model":
         return html.Div(
@@ -240,6 +262,75 @@ def render_tab(selected):
                     reflecting modern music consumption dynamics.
                     """,
                     style={"fontSize": "17px", "whiteSpace": "pre-line"},
+                ),
+
+                html.Br(),
+                html.H3("Explore XGBoost Predictions", style={"color": "#0b2f59"}),
+                html.P( 
+                    """
+                     What do these scores mean?
+
+                     • Predicted Popularity is a 0–100 score that approximates Spotify’s track popularity, 
+                     where higher values indicate songs that look more like widely streamed hits.
+
+                     • Predicted Marketability is a 0–100 index we designed that combines streaming popularity, 
+                        YouTube views and likes, engagement rate, and a small contribution from energy and danceability. 
+                        Higher values indicate songs that appear more attractive from a commercial/marketing standpoint.
+
+                     Use the filters bleow or click through the drop menu below to explore our predicted scores across 5000+ songs.
+                    """,
+                    style={"fontSize": "17px", "whiteSpace": "pre-line"},
+                ),
+                html.Br(),
+
+                html.Label("Filter by Artist:", style={"fontWeight": "bold"}),
+                dcc.Dropdown(
+                    id="model-artist-dropdown",
+                    options=model_artist_options,
+                    placeholder="Select an artist...",
+                ),
+                html.Br(),
+
+                html.Label("Filter by Album:", style={"fontWeight": "bold"}),
+                dcc.Dropdown(
+                    id="model-album-dropdown",
+                    options=model_album_options,
+                    placeholder="Select an album...",
+                ) if len(model_album_options) > 0 else html.Div(
+                    "(Album metadata not available in this dataset.)",
+                    style={"fontStyle": "italic", "marginBottom": "10px"},
+                ),
+                html.Br(),
+
+                html.Label("Search Songs or Albums:", style={"fontWeight": "bold"}),
+                dcc.Input(
+                    id="model-search-input",
+                    type="text",
+                    placeholder="Type song, album, or keyword...",
+                    style={"width": "100%", "padding": "10px"},
+                ),
+                html.Br(), html.Br(),
+
+                dash_table.DataTable(
+                    id="model-table",
+                    columns=[
+                        {"name": "Artist", "id": "Artist"},
+                        {"name": "Track", "id": "Track"},
+                        {"name": "Album", "id": "Album"},
+                        {"name": "Predicted Popularity", "id": "Predicted_Popularity"},
+                        {
+                            "name": "Predicted Marketability",
+                            "id": "Predicted_Marketability",
+                        },
+                    ],
+                    data=model_data.to_dict("records"),
+                    page_size=10,
+                    style_table={"overflowX": "auto"},
+                    style_header={
+                        "backgroundColor": "#0b2f59",
+                        "color": "white",
+                        "fontWeight": "bold",
+                    },
                 ),
             ]
         )
@@ -265,7 +356,7 @@ def render_tab(selected):
         )
 
     # ------------------------------------------------------
-    # FINAL REPORT SUMMARY TAB (UPDATED)
+    # FINAL REPORT SUMMARY TAB
     # ------------------------------------------------------
     elif selected == "report":
         return html.Div(
@@ -474,10 +565,53 @@ def update_table(selected_artist, search_text):
 
 
 # =========================================================
+# CALLBACK: FILTERING FOR MODEL TABLE (PREDICTIONS)
+# =========================================================
+
+@app.callback(
+    Output("model-table", "data"),
+    [
+        Input("model-artist-dropdown", "value"),
+        Input("model-album-dropdown", "value"),
+        Input("model-search-input", "value"),
+    ]
+)
+def update_model_table(selected_artist, selected_album, search_text):
+    df = model_data.copy()
+
+    # Filter by artist
+    if selected_artist:
+        df = df[df["Artist"] == selected_artist]
+
+    # Filter by album (only if column exists)
+    if selected_album and "Album" in df.columns:
+        df = df[df["Album"] == selected_album]
+
+    # Text search across string columns
+    if search_text and search_text.strip():
+        search = search_text.lower()
+        string_cols = df.select_dtypes(include="object").columns
+        mask = df[string_cols].apply(
+            lambda col: col.str.lower().str.contains(search, na=False)
+        )
+        df = df[mask.any(axis=1)]
+
+    # Only keep the columns we want to display
+    cols_to_keep = [
+        "Artist",
+        "Track",
+        "Album",
+        "Predicted_Popularity",
+        "Predicted_Marketability",
+    ]
+    existing = [c for c in cols_to_keep if c in df.columns]
+
+    return df[existing].to_dict("records")
+
+
+# =========================================================
 # RUN APP
 # =========================================================
 
 if __name__ == "__main__":
     app.run(debug=True)
-
-
