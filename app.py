@@ -1,6 +1,6 @@
 import pandas as pd
 from dash import Dash, dcc, html, Input, Output, dash_table
-
+from dash import callback_context
 # =========================================================
 # LOAD & CLEAN DATA  (SUMMARY TAB)
 # =========================================================
@@ -147,7 +147,7 @@ app.layout = html.Div(
                 dcc.Tab(label="Team & Acknowledgments", value="team"),
             ],
         ),
-
+        dcc.Store(id="selected-visual"),
         html.Div(id="tabs-content"),
         html.Br(),
 
@@ -342,19 +342,108 @@ def render_tab(selected):
         return html.Div(
             [
                 html.H2("Visualizations", style={"color": "#0b2f59"}),
-                html.P(
-                    """
-                    Interactive plots will appear here, including:
+    
+                html.Div(
+                    style={
+                        "display": "flex",
+                        "gap": "20px",
+                        "marginTop": "20px"
+                    },
+                    children=[
+    
+                        # ================= LEFT CATEGORY MENU =================
+                        html.Div(
+                            style={
+                                "width": "260px",
+                                "backgroundColor": "white",
+                                "padding": "20px",
+                                "borderRadius": "10px",
+                                "boxShadow": "0 2px 5px rgba(0,0,0,0.1)",
+                                "height": "fit-content"
+                            },
+                            children=[
+    
+                                html.H3("Choose a Visualization", 
+                                        style={"color": "#0b2f59", "marginBottom": "15px"}),
+    
+                                # ---- AUDIO FEATURE VISUALS ----
+                                html.H4("Audio Feature Visuals"),
+                                dcc.RadioItems(
+                                    id="vis-select",
+                                    options=[
+                                        {"label": "Correlation Heatmap", "value": "heatmap"},
+                                        {"label": "Scatter Matrix", "value": "matrix"},
+                                        {"label": "Audio Map (2D)", "value": "pca"},
+                                    ],
+                                    value="heatmap",
+                                    style={"marginBottom": "20px"}
+                                ),
+    
+                                # ---- ENGAGEMENT VISUALS ----
+                                html.H4("Engagement Visuals"),
+                                dcc.RadioItems(
+                                    id="vis-select-eng",
+                                    options=[
+                                        {"label": "Engagement vs Audio", "value": "eng"},
+                                    ],
+                                    value=None,
+                                    style={"marginBottom": "20px"}
+                                ),
+    
+                                # ---- PREDICTION VISUALS ----
+                                html.H4("Prediction Visuals"),
+                                dcc.RadioItems(
+                                    id="vis-select-pred",
+                                    options=[
+                                        {"label": "Predicted vs Actual Relationship (Scatter Plot)", "value": "pred_pop"},
+                                        {"label": "Distribution — Popularity & Marketability (Histogram)", "value": "pred_mark"},
+                                    ],
+                                    value=None,
+                                    style={"marginBottom": "10px"}
+                                ),
+                            ]
+                        ),
+    
+                        # ================= RIGHT DISPLAY PANEL =================
+                        html.Div(
+                            style={
+                                "flexGrow": 1,
+                                "backgroundColor": "white",
+                                "padding": "20px",
+                                "borderRadius": "10px",
+                                "boxShadow": "0 2px 5px rgba(0,0,0,0.1)"
+                            },
+                            children=[
+                                dcc.Loading(
+                                    type="circle",
+                                    children=html.Iframe(
+                                        id="vis-frame",
+                                        src="/assets/triangular_heatmap.html",
+                                        style={
+                                            "width": "100%",
+                                            "height": "900px",
+                                            "border": "none"
+                                        }
+                                    )
+                                ),
+                                html.Br(),
 
-                    • Relationships between acoustic features  
-                    • Engagement vs. audio-feature comparisons  
-                    • Clustering and similarity structures  
-                    """,
-                    style={"fontSize": "17px", "whiteSpace": "pre-line"},
+                                
+                                html.P(
+                                    id="vis-caption",
+                                    style={
+                                        "fontSize": "16px",
+                                        "fontStyle": "italic",
+                                        "color": "#444",
+                                        "marginTop": "10px"
+                                    }
+                                )
+                            ]
+                        )
+                    ]
                 ),
             ]
-        )
-
+        ) 
     # ------------------------------------------------------
     # FINAL REPORT SUMMARY TAB
     # ------------------------------------------------------
@@ -607,8 +696,107 @@ def update_model_table(selected_artist, selected_album, search_text):
     existing = [c for c in cols_to_keep if c in df.columns]
 
     return df[existing].to_dict("records")
+    
+# =========================================================
+# CALLBACK: Visualization Selector (IFRAME)
+# =========================================================
+
+@app.callback(
+    [
+        Output("vis-select", "value"),
+        Output("vis-select-eng", "value"),
+        Output("vis-select-pred", "value"),
+    ],
+    [
+        Input("vis-select", "value"),
+        Input("vis-select-eng", "value"),
+        Input("vis-select-pred", "value"),
+    ],
+    prevent_initial_call=True
+)
+def sync_radio_groups(audio_choice, eng_choice, pred_choice):
+    ctx = callback_context
+
+    clicked = ctx.triggered[0]["prop_id"].split(".")[0]
+
+    # AUDIO
+    if clicked == "vis-select":
+        return audio_choice, None, None
+
+    # ENGAGEMENT
+    if clicked == "vis-select-eng":
+        return None, eng_choice, None
+
+    # PREDICTION
+    if clicked == "vis-select-pred":
+        return None, None, pred_choice
+
+    return "heatmap", None, None
+
+@app.callback(
+    Output("selected-visual", "data"),
+    [
+        Input("vis-select", "value"),
+        Input("vis-select-eng", "value"),
+        Input("vis-select-pred", "value"),
+    ],
+    prevent_initial_call=True
+)
+def store_visual_choice(audio_choice, eng_choice, pred_choice):
+
+    if audio_choice:
+        return audio_choice
+    if eng_choice:
+        return eng_choice
+    if pred_choice:
+        return pred_choice
+
+    return "heatmap"
 
 
+@app.callback(
+    Output("vis-frame", "src"),
+    Input("selected-visual", "data")
+)
+def update_visual_iframe(choice):
+
+    if choice == "heatmap":
+        return "/assets/triangular_heatmap.html"
+
+    if choice == "eng":
+        return "/assets/engagement_vs_audio.html"
+
+    if choice == "pca":
+        return "/assets/audio_pca.html"
+
+    if choice == "matrix":
+        return "/assets/matrix.html"
+
+    if choice == "pred_pop":
+        return "/assets/predicted_relationship.html"
+
+    if choice == "pred_mark":
+        return "/assets/histogram.html"
+
+    # Default fallback
+    return "/assets/triangular_heatmap.html"
+
+@app.callback(
+    Output("vis-caption", "children"),
+    Input("selected-visual", "data")
+)
+def update_caption(choice):
+
+    captions = {
+        "heatmap": "This triangular acoustic heatmap displays correlations among audio features such as energy, danceability, valence, and tempo.",
+        "eng": "This plot shows how different audio features relate to engagement metrics like engagement rate.",
+        "pca": "This 2D audio map uses audio embeddings to group similar songs. The dropdown shows how popular or marketable a song is.",
+        "matrix": "This scatter matrix plots pairwise relationships between key audio features to highlight linear and nonlinear trends.",
+        "pred_pop": "This scatter plot shows how closely the model’s predicted values align with the actual values.",
+        "pred_mark": "This histogram shows the distributions of actual and model-predicted scores for marketability and popularity."
+    }
+
+    return captions.get(choice, "")
 # =========================================================
 # RUN APP
 # =========================================================
