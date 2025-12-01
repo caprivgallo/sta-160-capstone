@@ -2,19 +2,14 @@ import base64
 import io
 import os
 import tempfile
+import math
+import joblib
 import pandas as pd
-<<<<<<< HEAD
 import numpy as np
 import torch
 import torch.nn as nn
 import librosa
-from dash import Dash, dcc, html, Input, Output, State, dash_table
-import math
-
-=======
-from dash import Dash, dcc, html, Input, Output, dash_table
-from dash import callback_context
->>>>>>> 814dd222381d17f791c1504df27af5af4ad23910
+from dash import Dash, dcc, html, Input, Output, State, dash_table, callback_context
 # =========================================================
 # LOAD & CLEAN DATA  (SUMMARY TAB)
 # =========================================================
@@ -94,6 +89,12 @@ checkpoint = None
 target_frames = 768
 target_names = []
 target_stats = {}
+XGB_MODEL_POP_PATH = "xgb_popularity.pkl"
+XGB_MODEL_MARKET_PATH = "xgb_marketability.pkl"
+XGB_SCALER_PATH = "xgb_scaler.pkl"
+xgb_pop_model = None
+xgb_market_model = None
+xgb_scaler = None
 SR = 16000
 N_FFT = 512
 HOP = 160
@@ -129,6 +130,17 @@ except Exception:
         model_load_error = None
 else:
     model_load_error = None
+
+# XGB artifacts (if present)
+try:
+    if Path(XGB_MODEL_POP_PATH).exists() and Path(XGB_MODEL_MARKET_PATH).exists() and Path(XGB_SCALER_PATH).exists():
+        xgb_pop_model = joblib.load(XGB_MODEL_POP_PATH)
+        xgb_market_model = joblib.load(XGB_MODEL_MARKET_PATH)
+        xgb_scaler = joblib.load(XGB_SCALER_PATH)
+except Exception:
+    xgb_pop_model = None
+    xgb_market_model = None
+    xgb_scaler = None
 
 
 # Model architecture (from training)
@@ -379,6 +391,30 @@ def normal_percentile(z):
     """Approximate percentile from z-score using error function."""
     return 50 * (1 + math.erf(z / math.sqrt(2)))
 
+
+# XGB feature selection helper (based on model_data)
+xgb_target_cols = ["Predicted_Popularity", "Predicted_Marketability"]
+xgb_feature_cols = []
+if "model_data" in globals():
+    numeric_cols = model_data.select_dtypes(include=["float", "int"]).columns.tolist()
+    drop_cols = set(xgb_target_cols + ["Spotify_Track_Popularity", "Marketability"])
+    xgb_feature_cols = [c for c in numeric_cols if c not in drop_cols]
+
+
+def xgb_preprocess(df):
+    """
+    Select and scale features for XGB models. Expects columns present in xgb_feature_cols.
+    """
+    if not xgb_feature_cols:
+        raise ValueError("No XGB feature columns available.")
+    missing = [c for c in xgb_feature_cols if c not in df.columns]
+    if missing:
+        raise ValueError(f"Missing XGB feature columns: {', '.join(missing)}")
+    feats = df[xgb_feature_cols].astype(float).fillna(0)
+    if xgb_scaler is None:
+        raise ValueError("XGB scaler not loaded.")
+    return xgb_scaler.transform(feats)
+
 # Helper: Team member card style
 def card():
     return {
@@ -564,160 +600,250 @@ def render_tab(selected):
             [
                 html.H2("Deep Learning Model", style={"color": "#0b2f59"}),
 
-                html.P(
-                    """
-                    Provide feature values to generate predictions, or upload a CSV for batch
-                    scoring. Features should match the training schema used for this model.
-                    """,
-                    style={"fontSize": "17px"},
+                html.Label("Choose model engine:", style={"fontWeight": "bold"}),
+                dcc.RadioItems(
+                    id="model-engine",
+                    options=[
+                        {"label": "Audio CNN (log-mel, NPZ/audio)", "value": "cnn"},
+                        {"label": "XGBoost (precomputed table)", "value": "xgb"},
+                    ],
+                    value="cnn",
+                    labelStyle={"display": "block", "marginBottom": "4px"},
                 ),
+                html.Br(),
 
                 html.Div(
-                    style={
-                        "display": "grid",
-                        "gridTemplateColumns": "repeat(auto-fit, minmax(220px, 1fr))",
-                        "gap": "12px",
-                        "marginTop": "10px",
-                    },
+                    id="cnn-section",
                     children=[
-                        html.Div(
-                            [
-                                html.Label("Tempo (BPM)"),
-                                dcc.Slider(
-                                    id="tempo",
-                                    min=50,
-                                    max=220,
-                                    step=1,
-                                    value=120,
-                                    marks=None,
-                                    tooltip={"placement": "bottom"},
-                                ),
-                            ]
+                        html.P(
+                            """
+                            Provide feature values to generate predictions, or upload a CSV/NPZ/audio for batch
+                            scoring with the CNN. Features should match the training schema used for this model.
+                            """,
+                            style={"fontSize": "17px"},
                         ),
                         html.Div(
-                            [
-                                html.Label("Energy (0-1)"),
-                                dcc.Slider(
-                                    id="energy",
-                                    min=0,
-                                    max=1,
-                                    step=0.01,
-                                    value=0.6,
-                                    marks=None,
-                                    tooltip={"placement": "bottom"},
+                            style={
+                                "display": "grid",
+                                "gridTemplateColumns": "repeat(auto-fit, minmax(220px, 1fr))",
+                                "gap": "12px",
+                                "marginTop": "10px",
+                            },
+                            children=[
+                                html.Div(
+                                    [
+                                        html.Label("Tempo (BPM)"),
+                                        dcc.Slider(
+                                            id="tempo",
+                                            min=50,
+                                            max=220,
+                                            step=1,
+                                            value=120,
+                                            marks=None,
+                                            tooltip={"placement": "bottom"},
+                                        ),
+                                    ]
                                 ),
-                            ]
+                                html.Div(
+                                    [
+                                        html.Label("Energy (0-1)"),
+                                        dcc.Slider(
+                                            id="energy",
+                                            min=0,
+                                            max=1,
+                                            step=0.01,
+                                            value=0.6,
+                                            marks=None,
+                                            tooltip={"placement": "bottom"},
+                                        ),
+                                    ]
+                                ),
+                                html.Div(
+                                    [
+                                        html.Label("Loudness (dB)"),
+                                        dcc.Slider(
+                                            id="loudness",
+                                            min=-40,
+                                            max=5,
+                                            step=0.5,
+                                            value=-8,
+                                            marks=None,
+                                            tooltip={"placement": "bottom"},
+                                        ),
+                                    ]
+                                ),
+                                html.Div(
+                                    [
+                                        html.Label("Duration (ms)"),
+                                        dcc.Slider(
+                                            id="duration_ms",
+                                            min=60000,
+                                            max=480000,
+                                            step=5000,
+                                            value=180000,
+                                            marks=None,
+                                            tooltip={"placement": "bottom"},
+                                        ),
+                                    ]
+                                ),
+                            ],
                         ),
+                        html.Button(
+                            "Predict Single",
+                            id="predict-btn",
+                            n_clicks=0,
+                            style={
+                                "marginTop": "12px",
+                                "backgroundColor": "#0b2f59",
+                                "color": "white",
+                                "padding": "10px 18px",
+                                "borderRadius": "8px",
+                                "border": "none",
+                                "cursor": "pointer",
+                            },
+                        ),
+                        html.Div(id="single-output", style={"marginTop": "12px", "fontWeight": "bold"}),
+
+                        html.Hr(),
+                        html.H3("Batch Prediction", style={"color": "#0b2f59"}),
+                        html.P(
+                            "Upload a CSV (tempo, energy, loudness, duration_ms), an NPZ log-mel file, or audio.",
+                            style={"fontSize": "15px"},
+                        ),
+                        dcc.Upload(
+                            id="upload-data",
+                            children=html.Div(
+                                ["Drag and drop CSV/NPZ here, or ", html.A("select a file", style={"color": "#0b2f59"})]
+                            ),
+                            style={
+                                "width": "100%",
+                                "height": "90px",
+                                "lineHeight": "90px",
+                                "borderWidth": "2px",
+                                "borderStyle": "dashed",
+                                "borderColor": "#0b2f59",
+                                "textAlign": "center",
+                                "borderRadius": "10px",
+                                "marginBottom": "12px",
+                                "backgroundColor": "white",
+                            },
+                            multiple=False,
+                        ),
+                        html.Div(id="batch-output"),
+
+                        html.Br(),
+                        html.H3("Upload Audio (mp3/mp4/wav)", style={"color": "#0b2f59"}),
+                        html.P("We will compute log-mel features on the server and run the CNN.", style={"fontSize": "15px"}),
+                        dcc.Upload(
+                            id="upload-audio",
+                            children=html.Div(
+                                ["Drag and drop audio here, or ", html.A("select a file", style={"color": "#0b2f59"})]
+                            ),
+                            style={
+                                "width": "100%",
+                                "height": "90px",
+                                "lineHeight": "90px",
+                                "borderWidth": "2px",
+                                "borderStyle": "dashed",
+                                "borderColor": "#0b2f59",
+                                "textAlign": "center",
+                                "borderRadius": "10px",
+                                "marginBottom": "12px",
+                                "backgroundColor": "white",
+                            },
+                            multiple=False,
+                        ),
+                        html.Div(id="audio-output"),
+
+                        html.Br(),
                         html.Div(
                             [
-                                html.Label("Loudness (dB)"),
-                                dcc.Slider(
-                                    id="loudness",
-                                    min=-40,
-                                    max=5,
-                                    step=0.5,
-                                    value=-8,
-                                    marks=None,
-                                    tooltip={"placement": "bottom"},
-                                ),
-                            ]
-                        ),
-                        html.Div(
-                            [
-                                html.Label("Duration (ms)"),
-                                dcc.Slider(
-                                    id="duration_ms",
-                                    min=60000,
-                                    max=480000,
-                                    step=5000,
-                                    value=180000,
-                                    marks=None,
-                                    tooltip={"placement": "bottom"},
+                                html.H4("Notes", style={"color": "#0b2f59"}),
+                                html.Ul(
+                                    [
+                                        html.Li("CNN model best_model_robust.pt is loaded once at startup (CPU)."),
+                                        html.Li("CSV expects columns: tempo, energy, loudness, duration_ms; NPZ uploads should contain the feature matrix as the first array."),
+                                        html.Li("If predictions fail, a descriptive error will appear below. Checkpoint with only state_dict requires the model class (e.g., MultiTaskModel_v2_with_residuals) to be defined in code."),
+                                    ]
                                 ),
                             ]
                         ),
                     ],
                 ),
 
-                html.Button(
-                    "Predict Single",
-                    id="predict-btn",
-                    n_clicks=0,
-                    style={
-                        "marginTop": "12px",
-                        "backgroundColor": "#0b2f59",
-                        "color": "white",
-                        "padding": "10px 18px",
-                        "borderRadius": "8px",
-                        "border": "none",
-                        "cursor": "pointer",
-                    },
-                ),
-                html.Div(id="single-output", style={"marginTop": "12px", "fontWeight": "bold"}),
-
-                html.Hr(),
-                html.H3("Batch Prediction", style={"color": "#0b2f59"}),
-                html.P(
-                    "Upload a CSV (tempo, energy, loudness, duration_ms) or an NPZ feature file.",
-                    style={"fontSize": "15px"},
-                ),
-                dcc.Upload(
-                    id="upload-data",
-                    children=html.Div(
-                        ["Drag and drop CSV here, or ", html.A("select a file", style={"color": "#0b2f59"})]
-                    ),
-                    style={
-                        "width": "100%",
-                        "height": "90px",
-                        "lineHeight": "90px",
-                        "borderWidth": "2px",
-                        "borderStyle": "dashed",
-                        "borderColor": "#0b2f59",
-                        "textAlign": "center",
-                        "borderRadius": "10px",
-                        "marginBottom": "12px",
-                        "backgroundColor": "white",
-                    },
-                    multiple=False,
-                ),
-                html.Div(id="batch-output"),
-
-                html.Br(),
-                html.H3("Upload Audio (mp3/mp4/wav)", style={"color": "#0b2f59"}),
-                html.P("We will compute log-mel features on the server and run the CNN.", style={"fontSize": "15px"}),
-                dcc.Upload(
-                    id="upload-audio",
-                    children=html.Div(
-                        ["Drag and drop audio here, or ", html.A("select a file", style={"color": "#0b2f59"})]
-                    ),
-                    style={
-                        "width": "100%",
-                        "height": "90px",
-                        "lineHeight": "90px",
-                        "borderWidth": "2px",
-                        "borderStyle": "dashed",
-                        "borderColor": "#0b2f59",
-                        "textAlign": "center",
-                        "borderRadius": "10px",
-                        "marginBottom": "12px",
-                        "backgroundColor": "white",
-                    },
-                    multiple=False,
-                ),
-                html.Div(id="audio-output"),
-
-                html.Br(),
                 html.Div(
-                    [
-                        html.H4("Notes", style={"color": "#0b2f59"}),
-                        html.Ul(
-                            [
-                                html.Li("Model best_model_robust.pt is loaded once at startup (CPU)."),
-                                html.Li("CSV expects columns: tempo, energy, loudness, duration_ms; NPZ uploads should contain the feature matrix as the first array."),
-                                html.Li("If predictions fail, a descriptive error will appear below. Checkpoint with only state_dict requires the model class (e.g., MultiTaskModel_v2_with_residuals) to be defined in code."),
-                            ]
+                    id="xgb-section",
+                    children=[
+                        html.P(
+                            "View the XGBoost marketability/popularity predictions (precomputed) with filters.",
+                            style={"fontSize": "17px"},
                         ),
-                    ]
+                        html.P(
+                            "Upload a CSV containing the same numeric feature columns as merged_no_embeddings.csv to run XGB locally "
+                            "if xgb_popularity.pkl/xgb_marketability.pkl/xgb_scaler.pkl are present.",
+                            style={"fontSize": "14px", "color": "#444"},
+                        ),
+                        html.Div(
+                            style={"display": "grid", "gridTemplateColumns": "repeat(auto-fit, minmax(200px, 1fr))", "gap": "10px"},
+                            children=[
+                                dcc.Dropdown(
+                                    id="model-artist-dropdown",
+                                    options=model_artist_options,
+                                    placeholder="Filter by artist...",
+                                ),
+                                dcc.Dropdown(
+                                    id="model-album-dropdown",
+                                    options=model_album_options,
+                                    placeholder="Filter by album...",
+                                ),
+                                dcc.Input(
+                                    id="model-search-input",
+                                    type="text",
+                                    placeholder="Search track/artist...",
+                                ),
+                            ],
+                        ),
+                        html.Br(),
+                        dcc.Upload(
+                            id="xgb-upload",
+                            children=html.Div(
+                                ["Drag and drop CSV for XGB inference, or ", html.A("select a file", style={"color": "#0b2f59"})]
+                            ),
+                            style={
+                                "width": "100%",
+                                "height": "90px",
+                                "lineHeight": "90px",
+                                "borderWidth": "2px",
+                                "borderStyle": "dashed",
+                                "borderColor": "#0b2f59",
+                                "textAlign": "center",
+                                "borderRadius": "10px",
+                                "marginBottom": "12px",
+                                "backgroundColor": "white",
+                            },
+                            multiple=False,
+                        ),
+                        html.Div(id="xgb-upload-output"),
+                        html.Br(),
+                        dash_table.DataTable(
+                            id="model-table",
+                            columns=[
+                                {"name": "Artist", "id": "Artist"},
+                                {"name": "Track", "id": "Track"},
+                                {"name": "Album", "id": "Album"},
+                                {"name": "Predicted_Popularity", "id": "Predicted_Popularity"},
+                                {"name": "Predicted_Marketability", "id": "Predicted_Marketability"},
+                            ],
+                            data=model_data.head(50).to_dict("records"),
+                            page_size=10,
+                            style_table={"overflowX": "auto"},
+                            style_header={
+                                "backgroundColor": "#0b2f59",
+                                "color": "white",
+                                "fontWeight": "bold",
+                            },
+                        ),
+                    ],
                 ),
 
                 html.Br(),
@@ -1110,7 +1236,6 @@ def update_table(selected_artist, search_text):
 
 
 # =========================================================
-<<<<<<< HEAD
 # CALLBACKS: MODEL INFERENCE
 # =========================================================
 
@@ -1379,7 +1504,52 @@ def predict_audio(contents, filename):
         return f"Error processing {filename}: {e}"
 
 
-=======
+@app.callback(
+    [Output("cnn-section", "style"), Output("xgb-section", "style")],
+    Input("model-engine", "value"),
+)
+def toggle_model_sections(engine):
+    show = {"display": "block"}
+    hide = {"display": "none"}
+    if engine == "xgb":
+        return hide, show
+    return show, hide
+
+
+@app.callback(
+    Output("xgb-upload-output", "children"),
+    Input("xgb-upload", "contents"),
+    State("xgb-upload", "filename"),
+    prevent_initial_call=True,
+)
+def run_xgb_upload(contents, filename):
+    if contents is None:
+        return "No file uploaded."
+    if xgb_pop_model is None or xgb_market_model is None or xgb_scaler is None:
+        return "XGB artifacts not loaded. Add xgb_popularity.pkl, xgb_marketability.pkl, xgb_scaler.pkl to the repo."
+    try:
+        _, content_string = contents.split(",")
+        decoded = base64.b64decode(content_string)
+        df = pd.read_csv(io.BytesIO(decoded))
+        X = xgb_preprocess(df)
+        pop_pred = xgb_pop_model.predict(X)
+        market_pred = xgb_market_model.predict(X)
+        out = df.copy()
+        out["xgb_pred_popularity"] = pop_pred
+        out["xgb_pred_marketability"] = market_pred
+        return dash_table.DataTable(
+            data=out.head(200).to_dict("records"),
+            page_size=10,
+            style_table={"overflowX": "auto"},
+            style_header={
+                "backgroundColor": "#0b2f59",
+                "color": "white",
+                "fontWeight": "bold",
+            },
+        )
+    except Exception as e:
+        return f"Error running XGB inference on {filename}: {e}"
+# =========================================================
 # CALLBACK: FILTERING FOR MODEL TABLE (PREDICTIONS)
 # =========================================================
 
@@ -1394,15 +1564,12 @@ def predict_audio(contents, filename):
 def update_model_table(selected_artist, selected_album, search_text):
     df = model_data.copy()
 
-    # Filter by artist
     if selected_artist:
         df = df[df["Artist"] == selected_artist]
 
-    # Filter by album (only if column exists)
     if selected_album and "Album" in df.columns:
         df = df[df["Album"] == selected_album]
 
-    # Text search across string columns
     if search_text and search_text.strip():
         search = search_text.lower()
         string_cols = df.select_dtypes(include="object").columns
@@ -1411,7 +1578,6 @@ def update_model_table(selected_artist, selected_album, search_text):
         )
         df = df[mask.any(axis=1)]
 
-    # Only keep the columns we want to display
     cols_to_keep = [
         "Artist",
         "Track",
@@ -1420,9 +1586,9 @@ def update_model_table(selected_artist, selected_album, search_text):
         "Predicted_Marketability",
     ]
     existing = [c for c in cols_to_keep if c in df.columns]
-
     return df[existing].to_dict("records")
-    
+
+
 # =========================================================
 # CALLBACK: Visualization Selector (IFRAME)
 # =========================================================
@@ -1442,22 +1608,16 @@ def update_model_table(selected_artist, selected_album, search_text):
 )
 def sync_radio_groups(audio_choice, eng_choice, pred_choice):
     ctx = callback_context
-
     clicked = ctx.triggered[0]["prop_id"].split(".")[0]
 
-    # AUDIO
     if clicked == "vis-select":
         return audio_choice, None, None
-
-    # ENGAGEMENT
     if clicked == "vis-select-eng":
         return None, eng_choice, None
-
-    # PREDICTION
     if clicked == "vis-select-pred":
         return None, None, pred_choice
-
     return "heatmap", None, None
+
 
 @app.callback(
     Output("selected-visual", "data"),
@@ -1469,14 +1629,12 @@ def sync_radio_groups(audio_choice, eng_choice, pred_choice):
     prevent_initial_call=True
 )
 def store_visual_choice(audio_choice, eng_choice, pred_choice):
-
     if audio_choice:
         return audio_choice
     if eng_choice:
         return eng_choice
     if pred_choice:
         return pred_choice
-
     return "heatmap"
 
 
@@ -1485,45 +1643,35 @@ def store_visual_choice(audio_choice, eng_choice, pred_choice):
     Input("selected-visual", "data")
 )
 def update_visual_iframe(choice):
-
     if choice == "heatmap":
         return "/assets/triangular_heatmap.html"
-
     if choice == "eng":
         return "/assets/engagement_vs_audio.html"
-
     if choice == "pca":
         return "/assets/audio_pca.html"
-
     if choice == "matrix":
         return "/assets/matrix.html"
-
     if choice == "pred_pop":
         return "/assets/predicted_relationship.html"
-
     if choice == "pred_mark":
         return "/assets/histogram.html"
-
-    # Default fallback
     return "/assets/triangular_heatmap.html"
+
 
 @app.callback(
     Output("vis-caption", "children"),
     Input("selected-visual", "data")
 )
 def update_caption(choice):
-
     captions = {
         "heatmap": "This triangular acoustic heatmap displays correlations among audio features such as energy, danceability, valence, and tempo.",
         "eng": "This plot shows how different audio features relate to engagement metrics like engagement rate.",
         "pca": "This 2D audio map uses audio embeddings to group similar songs. The dropdown shows how popular or marketable a song is.",
         "matrix": "This scatter matrix plots pairwise relationships between key audio features to highlight linear and nonlinear trends.",
         "pred_pop": "This scatter plot shows how closely the model’s predicted values align with the actual values.",
-        "pred_mark": "This histogram shows the distributions of actual and model-predicted scores for marketability and popularity."
+        "pred_mark": "This histogram shows the distributions of actual and model-predicted scores for marketability and popularity.",
     }
-
     return captions.get(choice, "")
->>>>>>> 814dd222381d17f791c1504df27af5af4ad23910
 # =========================================================
 # RUN APP
 # =========================================================
