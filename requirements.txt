@@ -9,3 +9,4 @@ soundfile
 xgboost
 scikit-learn
 requests
+resampy

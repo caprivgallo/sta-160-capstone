@@ -1,6 +1,7 @@
 import base64
 import io
 import os
+from pathlib import Path
 import tempfile
 import math
 import joblib
@@ -11,6 +12,7 @@ import torch.nn as nn
 import librosa
 import requests
 from dash import Dash, dcc, html, Input, Output, State, dash_table, callback_context
+from pipeline import get_youtube_stats
 # =========================================================
 # LOAD & CLEAN DATA  (SUMMARY TAB)
 # =========================================================
@@ -63,7 +65,7 @@ model_artist_options = [
     for artist in sorted(model_data["Artist"].dropna().unique())
 ]
 
-# Dropdown options for MODEL tab (albums) – only if column exists
+# Dropdown options for MODEL tab (albums) — only if column exists
 if "Album" in model_data.columns:
     model_album_options = [
         {"label": album, "value": album}
@@ -71,6 +73,12 @@ if "Album" in model_data.columns:
     ]
 else:
     model_album_options = []
+
+# XGB feature columns derived from model_data
+xgb_target_cols = ["Predicted_Popularity", "Predicted_Marketability"]
+numeric_cols = model_data.select_dtypes(include=["float", "int"]).columns.tolist()
+drop_cols = set(xgb_target_cols + ["Spotify_Track_Popularity", "Marketability"])
+xgb_feature_cols = [c for c in numeric_cols if c not in drop_cols]
 
 # =========================================================
 # DASH APP SETUP
@@ -133,6 +141,19 @@ except Exception:
 else:
     model_load_error = None
 
+# =========================================================
+# MODEL LOADING (XGB artifacts)
+# =========================================================
+
+try:
+    if Path(XGB_MODEL_POP_PATH).exists() and Path(XGB_MODEL_MARKET_PATH).exists() and Path(XGB_SCALER_PATH).exists():
+        xgb_pop_model = joblib.load(XGB_MODEL_POP_PATH)
+        xgb_market_model = joblib.load(XGB_MODEL_MARKET_PATH)
+        xgb_scaler = joblib.load(XGB_SCALER_PATH)
+except Exception:
+    xgb_pop_model = None
+    xgb_market_model = None
+    xgb_scaler = None
 # XGB artifacts (if present)
 try:
     if Path(XGB_MODEL_POP_PATH).exists() and Path(XGB_MODEL_MARKET_PATH).exists() and Path(XGB_SCALER_PATH).exists():
@@ -392,6 +413,67 @@ def clamp_logs(pred_flat):
 def normal_percentile(z):
     """Approximate percentile from z-score using error function."""
     return 50 * (1 + math.erf(z / math.sqrt(2)))
+
+
+# Basic audio feature extraction for XGB fallback
+def compute_basic_audio_features(raw_bytes, max_duration=10.0):
+    """
+    Decode audio and extract lightweight features.
+    Limits decode to max_duration seconds to avoid long runtimes on large files.
+    """
+    y, sr = librosa.load(
+        io.BytesIO(raw_bytes),
+        sr=SR,
+        mono=True,
+        duration=max_duration,
+    )
+    if y is None or y.size == 0:
+        raise ValueError("Failed to decode audio")
+    tempo_arr, _ = librosa.beat.beat_track(y=y, sr=sr)
+    tempo = float(np.mean(tempo_arr)) if np.ndim(tempo_arr) else float(tempo_arr)
+    rms_scalar = float(np.mean(librosa.feature.rms(y=y)))
+    loudness = float(20 * np.log10(rms_scalar + 1e-9))
+    duration_ms = int(len(y) / sr * 1000)
+    zcr = float(np.mean(librosa.feature.zero_crossing_rate(y)))
+    spec_centroid = float(np.mean(librosa.feature.spectral_centroid(y=y, sr=sr)))
+    spec_bandwidth = float(np.mean(librosa.feature.spectral_bandwidth(y=y, sr=sr)))
+    spectral_contrast = float(np.mean(librosa.feature.spectral_contrast(y=y, sr=sr)))
+    return {
+        "tempo": tempo,
+        "loudness": loudness,
+        "duration_ms": duration_ms,
+        "zcr": zcr,
+        "spec_centroid": spec_centroid,
+        "spec_bandwidth": spec_bandwidth,
+        "spectral_contrast": spectral_contrast,
+    }
+
+
+def build_xgb_feature_row(audio_feats, yt_stats):
+    """
+    Build a feature dict aligned to xgb_feature_cols.
+    Fills missing fields with zeros.
+    """
+    row = {k: 0.0 for k in xgb_feature_cols}
+    if audio_feats:
+        for k, v in audio_feats.items():
+            if k in row:
+                row[k] = v
+    if yt_stats and "data" in yt_stats and not yt_stats.get("error"):
+        d = yt_stats["data"]
+        views = float(d.get("views", 0.0))
+        likes = float(d.get("likes", 0.0))
+        comments = float(d.get("comments", 0.0))
+        if "Views" in row: row["Views"] = views
+        if "Likes" in row: row["Likes"] = likes
+        if "Comments" in row: row["Comments"] = comments
+        if "log_views" in row: row["log_views"] = np.log1p(views)
+        if "log_likes" in row: row["log_likes"] = np.log1p(likes)
+        if "log_comments" in row: row["log_comments"] = np.log1p(comments)
+        if "like_view_ratio" in row: row["like_view_ratio"] = likes / (views + 1)
+        if "comment_view_ratio" in row: row["comment_view_ratio"] = comments / (views + 1)
+        if "engagement_rate" in row: row["engagement_rate"] = (likes + comments) / (views + 1)
+    return row
 
 
 # Genius lyrics helper
@@ -876,23 +958,68 @@ def render_tab(selected):
                                 dcc.Input(id="lyrics-artist", type="text", placeholder="Artist (optional)"),
                             ],
                         ),
-                        html.Button(
-                            "Find Lyrics",
-                            id="lyrics-button",
-                            n_clicks=0,
-                            style={
+                html.Button(
+                    "Find Lyrics",
+                    id="lyrics-button",
+                    n_clicks=0,
+                    style={
                                 "marginTop": "10px",
                                 "backgroundColor": "#0b2f59",
                                 "color": "white",
                                 "padding": "8px 14px",
                                 "borderRadius": "8px",
                                 "border": "none",
-                                "cursor": "pointer",
-                            },
-                        ),
-                        html.Div(id="lyrics-output", style={"marginTop": "8px"}),
+                        "cursor": "pointer",
+                    },
+                ),
+                html.Div(id="lyrics-output", style={"marginTop": "8px"}),
+
+                html.Br(),
+                html.H4("End-to-end XGB (Audio + Title)", style={"color": "#0b2f59"}),
+                html.Div(
+                    style={"display": "grid", "gridTemplateColumns": "repeat(auto-fit, minmax(220px, 1fr))", "gap": "10px"},
+                    children=[
+                        dcc.Input(id="xgb-song-title", type="text", placeholder="Song title"),
+                        dcc.Input(id="xgb-song-artist", type="text", placeholder="Artist (optional)"),
                     ],
                 ),
+                html.Br(),
+                dcc.Upload(
+                    id="xgb-audio",
+                    children=html.Div(
+                        ["Drag and drop audio for XGB scoring, or ", html.A("select a file", style={"color": "#0b2f59"})]
+                    ),
+                    style={
+                        "width": "100%",
+                        "height": "90px",
+                        "lineHeight": "90px",
+                        "borderWidth": "2px",
+                        "borderStyle": "dashed",
+                        "borderColor": "#0b2f59",
+                        "textAlign": "center",
+                        "borderRadius": "10px",
+                        "marginBottom": "12px",
+                        "backgroundColor": "white",
+                    },
+                    multiple=False,
+                ),
+                html.Button(
+                    "Run XGB End-to-End",
+                    id="xgb-e2e-button",
+                    n_clicks=0,
+                    style={
+                        "marginTop": "8px",
+                        "backgroundColor": "#0b2f59",
+                        "color": "white",
+                        "padding": "8px 14px",
+                        "borderRadius": "8px",
+                        "border": "none",
+                        "cursor": "pointer",
+                    },
+                ),
+                html.Div(id="xgb-e2e-output", style={"marginTop": "10px"}),
+            ],
+        ),
 
                 html.Br(),
                 html.H3("Explore XGBoost Predictions", style={"color": "#0b2f59"}),
@@ -1613,6 +1740,70 @@ def get_lyrics_url(n_clicks, title, artist):
     if url.startswith("http"):
         return html.A("View lyrics on Genius", href=url, target="_blank")
     return url
+
+
+@app.callback(
+    Output("xgb-e2e-output", "children"),
+    Input("xgb-e2e-button", "n_clicks"),
+    State("xgb-song-title", "value"),
+    State("xgb-song-artist", "value"),
+    State("xgb-audio", "contents"),
+    State("xgb-audio", "filename"),
+    prevent_initial_call=True,
+)
+def run_xgb_e2e(n_clicks, title, artist, contents, filename):
+    try:
+        if xgb_pop_model is None or xgb_market_model is None or xgb_scaler is None:
+            return "XGB artifacts not loaded. Ensure xgb_popularity.pkl, xgb_marketability.pkl, xgb_scaler.pkl are in the repo root."
+        # Title/artist optional: if missing, skip external lookups
+        title_val = title.strip() if title else ""
+        artist_val = artist.strip() if artist else ""
+        if not xgb_feature_cols:
+            return "XGB feature columns not available."
+
+        yt_stats = {"error": "Skipped (no title/artist)", "data": {}} if not title_val else get_youtube_stats(title_val, artist_val or None)
+        lyrics_link = None
+        if title_val:
+            lyrics_link = fetch_lyrics_url(title_val, artist_val or None)
+
+        audio_feats = {}
+        audio_err = None
+        if contents:
+            try:
+                _, content_string = contents.split(",")
+                decoded = base64.b64decode(content_string)
+                audio_feats = compute_basic_audio_features(decoded)
+            except Exception as e:
+                audio_err = f"Audio feature extraction failed: {e}"
+                audio_feats = {}
+        else:
+            audio_err = "No audio provided; using defaults for audio features."
+
+        row = build_xgb_feature_row(audio_feats, yt_stats)
+        df_row = pd.DataFrame([[row.get(col, 0.0) for col in xgb_feature_cols]], columns=xgb_feature_cols)
+        df_scaled = xgb_scaler.transform(df_row)
+        pop_pred = xgb_pop_model.predict(df_scaled)[0]
+        mkt_pred = xgb_market_model.predict(df_scaled)[0]
+
+        details = [
+            html.P(f"Predicted Popularity: {pop_pred:.2f}"),
+            html.P(f"Predicted Marketability: {mkt_pred:.2f}"),
+        ]
+        if yt_stats and not yt_stats.get("error"):
+            d = yt_stats["data"]
+            details.append(html.P(f"YouTube stats - Views: {d.get('views')}, Likes: {d.get('likes')}, Comments: {d.get('comments')}"))
+        elif yt_stats and yt_stats.get("error"):
+            details.append(html.P(f"YouTube stats error: {yt_stats['error']}"))
+        if audio_err:
+            details.append(html.P(audio_err, style={"color": "red"}))
+        if isinstance(lyrics_link, str) and lyrics_link.startswith("http"):
+            details.append(html.A("View lyrics on Genius", href=lyrics_link, target="_blank"))
+        elif lyrics_link:
+            details.append(html.P(f"Lyrics: {lyrics_link}"))
+
+        return html.Div(details)
+    except Exception as e:
+        return f"End-to-end XGB error: {e}"
 # =========================================================
 # CALLBACK: FILTERING FOR MODEL TABLE (PREDICTIONS)
 # =========================================================

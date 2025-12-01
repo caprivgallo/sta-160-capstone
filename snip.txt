@@ -1,0 +1,60 @@
+                    page_size=5,
+                    style_table={"overflowX": "auto"},
+                    style_header={
+                        "backgroundColor": "#0b2f59",
+                        "color": "white",
+                        "fontWeight": "bold",
+                    },
+                )
+
+        return html.Div(
+            [
+                html.H4(f"Prediction from {filename}", style={"color": "#0b2f59"}),
+                dash_table.DataTable(
+                    data=[pred_row],
+                    page_size=1,
+                    style_table={"overflowX": "auto"},
+                    style_header={
+                        "backgroundColor": "#0b2f59",
+                        "color": "white",
+                        "fontWeight": "bold",
+                    },
+                ),
+                html.Br(),
+                html.H4("Similar songs (by engagement profile)", style={"color": "#0b2f59"}),
+                rec_table or html.Div("Not enough data for recommendations."),
+            ]
+        )
+    except Exception as e:
+        return f"Error processing {filename}: {e}"
+
+
+@app.callback(
+    [Output("cnn-section", "style"), Output("xgb-section", "style")],
+    Input("model-engine", "value"),
+)
+def toggle_model_sections(engine):
+    show = {"display": "block"}
+    hide = {"display": "none"}
+    if engine == "xgb":
+        return hide, show
+    return show, hide
+
+
+@app.callback(
+    Output("xgb-upload-output", "children"),
+    Input("xgb-upload", "contents"),
+    State("xgb-upload", "filename"),
+    prevent_initial_call=True,
+)
+def run_xgb_upload(contents, filename):
+    if contents is None:
+        return "No file uploaded."
+    if xgb_pop_model is None or xgb_market_model is None or xgb_scaler is None:
+        return "XGB artifacts not loaded. Add xgb_popularity.pkl, xgb_marketability.pkl, xgb_scaler.pkl to the repo."
+    try:
+        _, content_string = contents.split(",")
+        decoded = base64.b64decode(content_string)
+        df = pd.read_csv(io.BytesIO(decoded))
+        X = xgb_preprocess(df)
+        pop_pred = xgb_pop_model.predict(X)
