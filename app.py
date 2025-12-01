@@ -3,6 +3,7 @@ import io
 import os
 import tempfile
 import pandas as pd
+<<<<<<< HEAD
 import numpy as np
 import torch
 import torch.nn as nn
@@ -10,8 +11,12 @@ import librosa
 from dash import Dash, dcc, html, Input, Output, State, dash_table
 import math
 
+=======
+from dash import Dash, dcc, html, Input, Output, dash_table
+from dash import callback_context
+>>>>>>> 814dd222381d17f791c1504df27af5af4ad23910
 # =========================================================
-# LOAD & CLEAN DATA
+# LOAD & CLEAN DATA  (SUMMARY TAB)
 # =========================================================
 
 data = pd.read_csv("merged_final_data.csv")
@@ -34,7 +39,7 @@ data["duration_min"] = (data["duration_ms"] / 60000).round(2)
 # Remove missing rows
 clean_data = data.dropna(subset=["tempo", "energy"])
 
-# Dropdown options
+# Dropdown options for SUMMARY tab
 artist_options = [
     {"label": artist, "value": artist}
     for artist in sorted(clean_data["Artist"].dropna().unique())
@@ -48,6 +53,28 @@ rec_meta = None
 if rec_feature_cols:
     rec_matrix = np.log1p(clean_data[rec_feature_cols].fillna(0).to_numpy())
     rec_meta = clean_data[rec_meta_cols] if rec_meta_cols else None
+
+# =========================================================
+# LOAD MODEL DATA (PREDICTIONS FOR DEEP LEARNING TAB)
+# =========================================================
+
+# CSV without embeddings, but WITH Predicted_Popularity & Predicted_Marketability
+model_data = pd.read_csv("merged_no_embeddings.csv")
+
+# Dropdown options for MODEL tab (artists)
+model_artist_options = [
+    {"label": artist, "value": artist}
+    for artist in sorted(model_data["Artist"].dropna().unique())
+]
+
+# Dropdown options for MODEL tab (albums) – only if column exists
+if "Album" in model_data.columns:
+    model_album_options = [
+        {"label": album, "value": album}
+        for album in sorted(model_data["Album"].dropna().unique())
+    ]
+else:
+    model_album_options = []
 
 # =========================================================
 # DASH APP SETUP
@@ -438,7 +465,7 @@ app.layout = html.Div(
                 dcc.Tab(label="Team & Acknowledgments", value="team"),
             ],
         ),
-
+        dcc.Store(id="selected-visual"),
         html.Div(id="tabs-content"),
         html.Br(),
 
@@ -530,7 +557,7 @@ def render_tab(selected):
         )
 
     # ------------------------------------------------------
-    # MODEL TAB
+    # MODEL TAB  (OVERVIEW + DROPDOWNS + TABLE OF PREDICTIONS)
     # ------------------------------------------------------
     elif selected == "model":
         return html.Div(
@@ -692,6 +719,75 @@ def render_tab(selected):
                         ),
                     ]
                 ),
+
+                html.Br(),
+                html.H3("Explore XGBoost Predictions", style={"color": "#0b2f59"}),
+                html.P( 
+                    """
+                     What do these scores mean?
+
+                     • Predicted Popularity is a 0–100 score that approximates Spotify’s track popularity, 
+                     where higher values indicate songs that look more like widely streamed hits.
+
+                     • Predicted Marketability is a 0–100 index we designed that combines streaming popularity, 
+                        YouTube views and likes, engagement rate, and a small contribution from energy and danceability. 
+                        Higher values indicate songs that appear more attractive from a commercial/marketing standpoint.
+
+                     Use the filters bleow or click through the drop menu below to explore our predicted scores across 5000+ songs.
+                    """,
+                    style={"fontSize": "17px", "whiteSpace": "pre-line"},
+                ),
+                html.Br(),
+
+                html.Label("Filter by Artist:", style={"fontWeight": "bold"}),
+                dcc.Dropdown(
+                    id="model-artist-dropdown",
+                    options=model_artist_options,
+                    placeholder="Select an artist...",
+                ),
+                html.Br(),
+
+                html.Label("Filter by Album:", style={"fontWeight": "bold"}),
+                dcc.Dropdown(
+                    id="model-album-dropdown",
+                    options=model_album_options,
+                    placeholder="Select an album...",
+                ) if len(model_album_options) > 0 else html.Div(
+                    "(Album metadata not available in this dataset.)",
+                    style={"fontStyle": "italic", "marginBottom": "10px"},
+                ),
+                html.Br(),
+
+                html.Label("Search Songs or Albums:", style={"fontWeight": "bold"}),
+                dcc.Input(
+                    id="model-search-input",
+                    type="text",
+                    placeholder="Type song, album, or keyword...",
+                    style={"width": "100%", "padding": "10px"},
+                ),
+                html.Br(), html.Br(),
+
+                dash_table.DataTable(
+                    id="model-table",
+                    columns=[
+                        {"name": "Artist", "id": "Artist"},
+                        {"name": "Track", "id": "Track"},
+                        {"name": "Album", "id": "Album"},
+                        {"name": "Predicted Popularity", "id": "Predicted_Popularity"},
+                        {
+                            "name": "Predicted Marketability",
+                            "id": "Predicted_Marketability",
+                        },
+                    ],
+                    data=model_data.to_dict("records"),
+                    page_size=10,
+                    style_table={"overflowX": "auto"},
+                    style_header={
+                        "backgroundColor": "#0b2f59",
+                        "color": "white",
+                        "fontWeight": "bold",
+                    },
+                ),
             ]
         )
 
@@ -702,21 +798,110 @@ def render_tab(selected):
         return html.Div(
             [
                 html.H2("Visualizations", style={"color": "#0b2f59"}),
-                html.P(
-                    """
-                    Interactive plots will appear here, including:
+    
+                html.Div(
+                    style={
+                        "display": "flex",
+                        "gap": "20px",
+                        "marginTop": "20px"
+                    },
+                    children=[
+    
+                        # ================= LEFT CATEGORY MENU =================
+                        html.Div(
+                            style={
+                                "width": "260px",
+                                "backgroundColor": "white",
+                                "padding": "20px",
+                                "borderRadius": "10px",
+                                "boxShadow": "0 2px 5px rgba(0,0,0,0.1)",
+                                "height": "fit-content"
+                            },
+                            children=[
+    
+                                html.H3("Choose a Visualization", 
+                                        style={"color": "#0b2f59", "marginBottom": "15px"}),
+    
+                                # ---- AUDIO FEATURE VISUALS ----
+                                html.H4("Audio Feature Visuals"),
+                                dcc.RadioItems(
+                                    id="vis-select",
+                                    options=[
+                                        {"label": "Correlation Heatmap", "value": "heatmap"},
+                                        {"label": "Scatter Matrix", "value": "matrix"},
+                                        {"label": "Audio Map (2D)", "value": "pca"},
+                                    ],
+                                    value="heatmap",
+                                    style={"marginBottom": "20px"}
+                                ),
+    
+                                # ---- ENGAGEMENT VISUALS ----
+                                html.H4("Engagement Visuals"),
+                                dcc.RadioItems(
+                                    id="vis-select-eng",
+                                    options=[
+                                        {"label": "Engagement vs Audio", "value": "eng"},
+                                    ],
+                                    value=None,
+                                    style={"marginBottom": "20px"}
+                                ),
+    
+                                # ---- PREDICTION VISUALS ----
+                                html.H4("Prediction Visuals"),
+                                dcc.RadioItems(
+                                    id="vis-select-pred",
+                                    options=[
+                                        {"label": "Predicted vs Actual Relationship (Scatter Plot)", "value": "pred_pop"},
+                                        {"label": "Distribution — Popularity & Marketability (Histogram)", "value": "pred_mark"},
+                                    ],
+                                    value=None,
+                                    style={"marginBottom": "10px"}
+                                ),
+                            ]
+                        ),
+    
+                        # ================= RIGHT DISPLAY PANEL =================
+                        html.Div(
+                            style={
+                                "flexGrow": 1,
+                                "backgroundColor": "white",
+                                "padding": "20px",
+                                "borderRadius": "10px",
+                                "boxShadow": "0 2px 5px rgba(0,0,0,0.1)"
+                            },
+                            children=[
+                                dcc.Loading(
+                                    type="circle",
+                                    children=html.Iframe(
+                                        id="vis-frame",
+                                        src="/assets/triangular_heatmap.html",
+                                        style={
+                                            "width": "100%",
+                                            "height": "900px",
+                                            "border": "none"
+                                        }
+                                    )
+                                ),
+                                html.Br(),
 
-                    • Relationships between acoustic features  
-                    • Engagement vs. audio-feature comparisons  
-                    • Clustering and similarity structures  
-                    """,
-                    style={"fontSize": "17px", "whiteSpace": "pre-line"},
+                                
+                                html.P(
+                                    id="vis-caption",
+                                    style={
+                                        "fontSize": "16px",
+                                        "fontStyle": "italic",
+                                        "color": "#444",
+                                        "marginTop": "10px"
+                                    }
+                                )
+                            ]
+                        )
+                    ]
                 ),
             ]
-        )
-
+        ) 
     # ------------------------------------------------------
-    # FINAL REPORT SUMMARY TAB (UPDATED)
+    # FINAL REPORT SUMMARY TAB
     # ------------------------------------------------------
     elif selected == "report":
         return html.Div(
@@ -925,6 +1110,7 @@ def update_table(selected_artist, search_text):
 
 
 # =========================================================
+<<<<<<< HEAD
 # CALLBACKS: MODEL INFERENCE
 # =========================================================
 
@@ -1193,11 +1379,154 @@ def predict_audio(contents, filename):
         return f"Error processing {filename}: {e}"
 
 
+=======
+# CALLBACK: FILTERING FOR MODEL TABLE (PREDICTIONS)
+# =========================================================
+
+@app.callback(
+    Output("model-table", "data"),
+    [
+        Input("model-artist-dropdown", "value"),
+        Input("model-album-dropdown", "value"),
+        Input("model-search-input", "value"),
+    ]
+)
+def update_model_table(selected_artist, selected_album, search_text):
+    df = model_data.copy()
+
+    # Filter by artist
+    if selected_artist:
+        df = df[df["Artist"] == selected_artist]
+
+    # Filter by album (only if column exists)
+    if selected_album and "Album" in df.columns:
+        df = df[df["Album"] == selected_album]
+
+    # Text search across string columns
+    if search_text and search_text.strip():
+        search = search_text.lower()
+        string_cols = df.select_dtypes(include="object").columns
+        mask = df[string_cols].apply(
+            lambda col: col.str.lower().str.contains(search, na=False)
+        )
+        df = df[mask.any(axis=1)]
+
+    # Only keep the columns we want to display
+    cols_to_keep = [
+        "Artist",
+        "Track",
+        "Album",
+        "Predicted_Popularity",
+        "Predicted_Marketability",
+    ]
+    existing = [c for c in cols_to_keep if c in df.columns]
+
+    return df[existing].to_dict("records")
+    
+# =========================================================
+# CALLBACK: Visualization Selector (IFRAME)
+# =========================================================
+
+@app.callback(
+    [
+        Output("vis-select", "value"),
+        Output("vis-select-eng", "value"),
+        Output("vis-select-pred", "value"),
+    ],
+    [
+        Input("vis-select", "value"),
+        Input("vis-select-eng", "value"),
+        Input("vis-select-pred", "value"),
+    ],
+    prevent_initial_call=True
+)
+def sync_radio_groups(audio_choice, eng_choice, pred_choice):
+    ctx = callback_context
+
+    clicked = ctx.triggered[0]["prop_id"].split(".")[0]
+
+    # AUDIO
+    if clicked == "vis-select":
+        return audio_choice, None, None
+
+    # ENGAGEMENT
+    if clicked == "vis-select-eng":
+        return None, eng_choice, None
+
+    # PREDICTION
+    if clicked == "vis-select-pred":
+        return None, None, pred_choice
+
+    return "heatmap", None, None
+
+@app.callback(
+    Output("selected-visual", "data"),
+    [
+        Input("vis-select", "value"),
+        Input("vis-select-eng", "value"),
+        Input("vis-select-pred", "value"),
+    ],
+    prevent_initial_call=True
+)
+def store_visual_choice(audio_choice, eng_choice, pred_choice):
+
+    if audio_choice:
+        return audio_choice
+    if eng_choice:
+        return eng_choice
+    if pred_choice:
+        return pred_choice
+
+    return "heatmap"
+
+
+@app.callback(
+    Output("vis-frame", "src"),
+    Input("selected-visual", "data")
+)
+def update_visual_iframe(choice):
+
+    if choice == "heatmap":
+        return "/assets/triangular_heatmap.html"
+
+    if choice == "eng":
+        return "/assets/engagement_vs_audio.html"
+
+    if choice == "pca":
+        return "/assets/audio_pca.html"
+
+    if choice == "matrix":
+        return "/assets/matrix.html"
+
+    if choice == "pred_pop":
+        return "/assets/predicted_relationship.html"
+
+    if choice == "pred_mark":
+        return "/assets/histogram.html"
+
+    # Default fallback
+    return "/assets/triangular_heatmap.html"
+
+@app.callback(
+    Output("vis-caption", "children"),
+    Input("selected-visual", "data")
+)
+def update_caption(choice):
+
+    captions = {
+        "heatmap": "This triangular acoustic heatmap displays correlations among audio features such as energy, danceability, valence, and tempo.",
+        "eng": "This plot shows how different audio features relate to engagement metrics like engagement rate.",
+        "pca": "This 2D audio map uses audio embeddings to group similar songs. The dropdown shows how popular or marketable a song is.",
+        "matrix": "This scatter matrix plots pairwise relationships between key audio features to highlight linear and nonlinear trends.",
+        "pred_pop": "This scatter plot shows how closely the model’s predicted values align with the actual values.",
+        "pred_mark": "This histogram shows the distributions of actual and model-predicted scores for marketability and popularity."
+    }
+
+    return captions.get(choice, "")
+>>>>>>> 814dd222381d17f791c1504df27af5af4ad23910
 # =========================================================
 # RUN APP
 # =========================================================
 
 if __name__ == "__main__":
     app.run(debug=True)
-
-
