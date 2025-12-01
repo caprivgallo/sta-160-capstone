@@ -1,5 +1,14 @@
+import base64
+import io
+import os
+import tempfile
 import pandas as pd
-from dash import Dash, dcc, html, Input, Output, dash_table
+import numpy as np
+import torch
+import torch.nn as nn
+import librosa
+from dash import Dash, dcc, html, Input, Output, State, dash_table
+import math
 
 # =========================================================
 # LOAD & CLEAN DATA
@@ -31,6 +40,15 @@ artist_options = [
     for artist in sorted(clean_data["Artist"].dropna().unique())
 ]
 
+# Precompute recommendation matrix (log space for Views/Likes/Comments)
+rec_feature_cols = [c for c in ["Views", "Likes", "Comments"] if c in clean_data.columns]
+rec_meta_cols = [c for c in ["Artist", "Track"] if c in clean_data.columns]
+rec_matrix = None
+rec_meta = None
+if rec_feature_cols:
+    rec_matrix = np.log1p(clean_data[rec_feature_cols].fillna(0).to_numpy())
+    rec_meta = clean_data[rec_meta_cols] if rec_meta_cols else None
+
 # =========================================================
 # DASH APP SETUP
 # =========================================================
@@ -38,6 +56,301 @@ artist_options = [
 app = Dash(__name__, suppress_callback_exceptions=True)
 server = app.server  # Required for Render
 app.title = "The Science of Song Success"
+
+# =========================================================
+# MODEL LOADING (PyTorch)
+# =========================================================
+
+MODEL_PATH = "best_model_robust.pt"
+DEVICE = "cpu"
+checkpoint = None
+target_frames = 768
+target_names = []
+target_stats = {}
+SR = 16000
+N_FFT = 512
+HOP = 160
+WIN = 400
+N_MELS = 128
+FMIN = 20
+FMAX = 8000
+POWER = 2.0
+EPS = 1e-10
+
+try:
+    # Try TorchScript first
+    model = torch.jit.load(MODEL_PATH, map_location=DEVICE)
+    model.eval()
+except Exception:
+    try:
+        checkpoint = torch.load(MODEL_PATH, map_location=DEVICE)
+        if isinstance(checkpoint, dict):
+            target_names = checkpoint.get("targets") or []
+            target_stats = checkpoint.get("target_stats") or {}
+            cfg_frames = checkpoint.get("config", {}).get("frames")
+            if cfg_frames:
+                target_frames = int(cfg_frames)
+        if hasattr(checkpoint, "eval") and not isinstance(checkpoint, dict):
+            model = checkpoint
+            model.eval()
+        else:
+            model = None
+    except Exception as e:  # pragma: no cover - startup guard
+        model = None
+        model_load_error = str(e)
+    else:
+        model_load_error = None
+else:
+    model_load_error = None
+
+
+# Model architecture (from training)
+class ConvBlock(nn.Module):
+    def __init__(self, cin, cout, k=(3, 7), s=(1, 1), p=None):
+        super().__init__()
+        p = p or (k[0] // 2, k[1] // 2)
+        self.conv = nn.Conv2d(cin, cout, k, s, p)
+        self.bn = nn.BatchNorm2d(cout)
+        self.act = nn.SiLU()
+
+    def forward(self, x):
+        return self.act(self.bn(self.conv(x)))
+
+
+class ResidualBlock(nn.Module):
+    def __init__(self, channels, k=(3, 3)):
+        super().__init__()
+        p = (k[0] // 2, k[1] // 2)
+        self.conv1 = nn.Conv2d(channels, channels, k, padding=p)
+        self.bn1 = nn.BatchNorm2d(channels)
+        self.act1 = nn.SiLU()
+        self.conv2 = nn.Conv2d(channels, channels, k, padding=p)
+        self.bn2 = nn.BatchNorm2d(channels)
+        self.act2 = nn.SiLU()
+
+    def forward(self, x):
+        identity = x
+        out = self.act1(self.bn1(self.conv1(x)))
+        out = self.bn2(self.conv2(out))
+        out = out + identity
+        return self.act2(out)
+
+
+class MultiTaskModel_v2_with_residuals(nn.Module):
+    def __init__(self, n_targets):
+        super().__init__()
+        C = [32, 64, 128, 256, 512]
+        self.stem = ConvBlock(1, C[0], (3, 7))
+        self.res_stem = ResidualBlock(C[0], (3, 3))
+        self.b1 = ConvBlock(C[0], C[1], (3, 5))
+        self.res1 = ResidualBlock(C[1], (3, 3))
+        self.b2 = ConvBlock(C[1], C[2], (3, 5))
+        self.res2 = ResidualBlock(C[2], (3, 3))
+        self.b3 = ConvBlock(C[2], C[3], (3, 3))
+        self.res3 = ResidualBlock(C[3], (3, 3))
+        self.b4 = ConvBlock(C[3], C[4], (3, 3))
+        self.res4 = ResidualBlock(C[4], (3, 3))
+        self.pool = nn.AdaptiveAvgPool2d((1, 1))
+        self.head = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(C[4], 256),
+            nn.SiLU(),
+            nn.Dropout(0.3),
+            nn.Linear(256, n_targets),
+        )
+
+    def forward(self, x):
+        x = self.stem(x)
+        x = self.res_stem(x)
+        x = self.b1(x)
+        x = self.res1(x)
+        x = self.b2(x)
+        x = self.res2(x)
+        x = nn.functional.max_pool2d(x, 2)
+        x = self.b3(x)
+        x = self.res3(x)
+        x = nn.functional.max_pool2d(x, 2)
+        x = self.b4(x)
+        x = self.res4(x)
+        x = self.pool(x)
+        return self.head(x)
+
+
+# If checkpoint has a state dict, build the model now
+if model is None and isinstance(checkpoint, dict) and "model_state_dict" in checkpoint:
+    if target_names:
+        try:
+            model = MultiTaskModel_v2_with_residuals(n_targets=len(target_names))
+            model.load_state_dict(checkpoint["model_state_dict"])
+            model.eval()
+            model_load_error = None
+        except Exception as e:  # pragma: no cover
+            model_load_error = f"Failed to load state_dict into model: {e}"
+    else:
+        model_load_error = "Checkpoint has state_dict but no targets list to size the model."
+
+
+def preprocess_features(df):
+    """
+    Basic preprocessing placeholder.
+    Replace/extend with the exact steps used during training.
+    """
+    cols = ["tempo", "energy", "loudness", "duration_ms"]
+    missing = [c for c in cols if c not in df.columns]
+    if missing:
+        raise ValueError(f"Missing columns: {', '.join(missing)}")
+    return torch.tensor(df[cols].values, dtype=torch.float32, device=DEVICE)
+
+
+def prepare_logmel_tensor(raw_bytes, target_frames=768, n_mels=128):
+    """
+    Load an NPZ log-mel file from bytes and return a tensor of shape [1, 1, n_mels, target_frames].
+    Crops/pads to target_frames and applies winsorization + per-file standardization
+    similar to the training pipeline.
+    """
+    np_obj = np.load(io.BytesIO(raw_bytes))
+    if isinstance(np_obj, np.lib.npyio.NpzFile):
+        if "logmel" in np_obj.files:
+            arr = np_obj["logmel"]
+        elif np_obj.files:
+            arr = np_obj[np_obj.files[0]]
+        else:
+            raise ValueError("NPZ file is empty.")
+    else:
+        arr = np_obj
+    if arr.ndim != 2:
+        raise ValueError(f"Expected logmel 2D array, got shape {arr.shape}")
+    if arr.shape[0] != n_mels:
+        raise ValueError(f"Expected {n_mels} mel bins, got {arr.shape[0]}")
+
+    # time axis is arr.shape[1]; crop/pad to target_frames
+    T = arr.shape[1]
+    if T >= target_frames:
+        start = (T - target_frames) // 2
+        arr = arr[:, start:start + target_frames]
+    else:
+        pad_before = (target_frames - T) // 2
+        pad_after = target_frames - T - pad_before
+        arr = np.pad(arr, ((0, 0), (pad_before, pad_after)), mode="constant")
+
+    # winsorize and standardize per sample
+    lo, hi = np.percentile(arr, [0.5, 99.5]).astype(np.float32)
+    arr = np.clip(arr, lo, hi)
+    m = float(np.mean(arr, dtype=np.float64))
+    s = float(np.std(arr, dtype=np.float64))
+    if not np.isfinite(s) or s < 1e-6:
+        raise ValueError("Invalid std in logmel array.")
+    arr = (arr - m) / s
+    arr = np.clip(arr, -10, 10)
+
+    tensor = torch.tensor(arr, dtype=torch.float32, device=DEVICE).unsqueeze(0).unsqueeze(0)
+    return tensor
+
+
+def logmel_from_audio_bytes(file_bytes, target_frames=768):
+    """
+    Decode audio bytes (mp3/mp4/wav) -> log-mel -> standardized tensor [1,1,n_mels,target_frames].
+    Mirrors the training pipeline params.
+    """
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".tmp") as tmp:
+        tmp.write(file_bytes)
+        tmp_path = tmp.name
+    try:
+        y, sr = librosa.load(tmp_path, sr=SR, mono=True)
+    finally:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+
+    if y is None or y.size == 0:
+        raise ValueError("Failed to decode audio.")
+
+    S = librosa.feature.melspectrogram(
+        y=y,
+        sr=SR,
+        n_fft=N_FFT,
+        hop_length=HOP,
+        win_length=WIN,
+        n_mels=N_MELS,
+        fmin=FMIN,
+        fmax=FMAX,
+        power=POWER,
+    )
+    logS = np.log10(np.maximum(S, EPS)).astype(np.float32)
+
+    # crop/pad to target_frames
+    T = logS.shape[1]
+    if T >= target_frames:
+        start = (T - target_frames) // 2
+        logS = logS[:, start:start + target_frames]
+    else:
+        pad_before = (target_frames - T) // 2
+        pad_after = target_frames - T - pad_before
+        logS = np.pad(logS, ((0, 0), (pad_before, pad_after)), mode="constant")
+
+    # winsorize + standardize
+    lo, hi = np.percentile(logS, [0.5, 99.5]).astype(np.float32)
+    logS = np.clip(logS, lo, hi)
+    m = float(np.mean(logS, dtype=np.float64))
+    s = float(np.std(logS, dtype=np.float64))
+    if not np.isfinite(s) or s < 1e-6:
+        raise ValueError("Invalid std in logmel array.")
+    logS = (logS - m) / s
+    logS = np.clip(logS, -10, 10)
+
+    return torch.tensor(logS, dtype=torch.float32, device=DEVICE).unsqueeze(0).unsqueeze(0)
+
+
+def denormalize_predictions(pred_array):
+    """Apply target mean/std from checkpoint if shapes align."""
+    if not target_names or not target_stats:
+        return pred_array
+    if pred_array.shape[-1] != len(target_names):
+        return pred_array
+    pred = np.array(pred_array, dtype=float)
+    for i, name in enumerate(target_names):
+        stats = target_stats.get(name)
+        if stats and "mean" in stats and "std" in stats:
+            pred[..., i] = pred[..., i] * stats["std"] + stats["mean"]
+    return pred
+
+
+def expm1_for_logs(pred_array):
+    """
+    Convert *_log targets back to real scale using expm1.
+    Returns a dict mapping target name -> array of converted values when applicable.
+    """
+    if not target_names:
+        return {}
+    pred_array = np.array(pred_array, dtype=float)
+    outputs = {}
+    for i, name in enumerate(target_names):
+        if name.endswith("_log"):
+            base = name.replace("_log", "")
+            outputs[base] = np.expm1(pred_array[..., i])
+    return outputs
+
+
+def clamp_logs(pred_flat):
+    """
+    Clamp *_log predictions to mean ± 2.5 std using target_stats.
+    Mutates and returns the array.
+    """
+    if not target_stats:
+        return pred_flat
+    for i, name in enumerate(target_names):
+        if name.endswith("_log") and name in target_stats:
+            mu = target_stats[name].get("mean")
+            sd = target_stats[name].get("std")
+            if mu is not None and sd is not None:
+                pred_flat[i] = np.clip(pred_flat[i], mu - 2.5 * sd, mu + 2.5 * sd)
+    return pred_flat
+
+
+def normal_percentile(z):
+    """Approximate percentile from z-score using error function."""
+    return 50 * (1 + math.erf(z / math.sqrt(2)))
 
 # Helper: Team member card style
 def card():
@@ -222,24 +535,162 @@ def render_tab(selected):
     elif selected == "model":
         return html.Div(
             [
-                html.H2("Deep Learning Model Overview", style={"color": "#0b2f59"}),
+                html.H2("Deep Learning Model", style={"color": "#0b2f59"}),
 
                 html.P(
                     """
-                    This section summarizes the design, evaluation, and performance of our 
-                    deep learning model. The model uses Spotify acoustic features—including 
-                    danceability, energy, tempo, and valence—to predict YouTube engagement 
-                    metrics such as views, likes, and comments.
-
-                    After extensive tuning and feature engineering, our models achieved:
-
-                    • Popularity Model → R² ≈ 0.656, MAE ≈ 5.02  
-                    • Marketability Model → R² ≈ 0.698, MAE ≈ 2.02  
-
-                    Engagement-driven models produced the strongest predictive power,
-                    reflecting modern music consumption dynamics.
+                    Provide feature values to generate predictions, or upload a CSV for batch
+                    scoring. Features should match the training schema used for this model.
                     """,
-                    style={"fontSize": "17px", "whiteSpace": "pre-line"},
+                    style={"fontSize": "17px"},
+                ),
+
+                html.Div(
+                    style={
+                        "display": "grid",
+                        "gridTemplateColumns": "repeat(auto-fit, minmax(220px, 1fr))",
+                        "gap": "12px",
+                        "marginTop": "10px",
+                    },
+                    children=[
+                        html.Div(
+                            [
+                                html.Label("Tempo (BPM)"),
+                                dcc.Slider(
+                                    id="tempo",
+                                    min=50,
+                                    max=220,
+                                    step=1,
+                                    value=120,
+                                    marks=None,
+                                    tooltip={"placement": "bottom"},
+                                ),
+                            ]
+                        ),
+                        html.Div(
+                            [
+                                html.Label("Energy (0-1)"),
+                                dcc.Slider(
+                                    id="energy",
+                                    min=0,
+                                    max=1,
+                                    step=0.01,
+                                    value=0.6,
+                                    marks=None,
+                                    tooltip={"placement": "bottom"},
+                                ),
+                            ]
+                        ),
+                        html.Div(
+                            [
+                                html.Label("Loudness (dB)"),
+                                dcc.Slider(
+                                    id="loudness",
+                                    min=-40,
+                                    max=5,
+                                    step=0.5,
+                                    value=-8,
+                                    marks=None,
+                                    tooltip={"placement": "bottom"},
+                                ),
+                            ]
+                        ),
+                        html.Div(
+                            [
+                                html.Label("Duration (ms)"),
+                                dcc.Slider(
+                                    id="duration_ms",
+                                    min=60000,
+                                    max=480000,
+                                    step=5000,
+                                    value=180000,
+                                    marks=None,
+                                    tooltip={"placement": "bottom"},
+                                ),
+                            ]
+                        ),
+                    ],
+                ),
+
+                html.Button(
+                    "Predict Single",
+                    id="predict-btn",
+                    n_clicks=0,
+                    style={
+                        "marginTop": "12px",
+                        "backgroundColor": "#0b2f59",
+                        "color": "white",
+                        "padding": "10px 18px",
+                        "borderRadius": "8px",
+                        "border": "none",
+                        "cursor": "pointer",
+                    },
+                ),
+                html.Div(id="single-output", style={"marginTop": "12px", "fontWeight": "bold"}),
+
+                html.Hr(),
+                html.H3("Batch Prediction", style={"color": "#0b2f59"}),
+                html.P(
+                    "Upload a CSV (tempo, energy, loudness, duration_ms) or an NPZ feature file.",
+                    style={"fontSize": "15px"},
+                ),
+                dcc.Upload(
+                    id="upload-data",
+                    children=html.Div(
+                        ["Drag and drop CSV here, or ", html.A("select a file", style={"color": "#0b2f59"})]
+                    ),
+                    style={
+                        "width": "100%",
+                        "height": "90px",
+                        "lineHeight": "90px",
+                        "borderWidth": "2px",
+                        "borderStyle": "dashed",
+                        "borderColor": "#0b2f59",
+                        "textAlign": "center",
+                        "borderRadius": "10px",
+                        "marginBottom": "12px",
+                        "backgroundColor": "white",
+                    },
+                    multiple=False,
+                ),
+                html.Div(id="batch-output"),
+
+                html.Br(),
+                html.H3("Upload Audio (mp3/mp4/wav)", style={"color": "#0b2f59"}),
+                html.P("We will compute log-mel features on the server and run the CNN.", style={"fontSize": "15px"}),
+                dcc.Upload(
+                    id="upload-audio",
+                    children=html.Div(
+                        ["Drag and drop audio here, or ", html.A("select a file", style={"color": "#0b2f59"})]
+                    ),
+                    style={
+                        "width": "100%",
+                        "height": "90px",
+                        "lineHeight": "90px",
+                        "borderWidth": "2px",
+                        "borderStyle": "dashed",
+                        "borderColor": "#0b2f59",
+                        "textAlign": "center",
+                        "borderRadius": "10px",
+                        "marginBottom": "12px",
+                        "backgroundColor": "white",
+                    },
+                    multiple=False,
+                ),
+                html.Div(id="audio-output"),
+
+                html.Br(),
+                html.Div(
+                    [
+                        html.H4("Notes", style={"color": "#0b2f59"}),
+                        html.Ul(
+                            [
+                                html.Li("Model best_model_robust.pt is loaded once at startup (CPU)."),
+                                html.Li("CSV expects columns: tempo, energy, loudness, duration_ms; NPZ uploads should contain the feature matrix as the first array."),
+                                html.Li("If predictions fail, a descriptive error will appear below. Checkpoint with only state_dict requires the model class (e.g., MultiTaskModel_v2_with_residuals) to be defined in code."),
+                            ]
+                        ),
+                    ]
                 ),
             ]
         )
@@ -471,6 +922,275 @@ def update_table(selected_artist, search_text):
         df = df[mask.any(axis=1)]
 
     return df.to_dict("records")
+
+
+# =========================================================
+# CALLBACKS: MODEL INFERENCE
+# =========================================================
+
+
+@app.callback(
+    Output("single-output", "children"),
+    Input("predict-btn", "n_clicks"),
+    State("tempo", "value"),
+    State("energy", "value"),
+    State("loudness", "value"),
+    State("duration_ms", "value"),
+    prevent_initial_call=True,
+)
+def predict_single(n_clicks, tempo, energy, loudness, duration_ms):
+    if model is None:
+        return f"Model not loaded: {model_load_error}"
+    if target_names:
+        return "This model expects log-mel NPZ input. Use the batch upload below to score an NPZ file."
+
+    try:
+        df = pd.DataFrame(
+            [
+                {
+                    "tempo": tempo,
+                    "energy": energy,
+                    "loudness": loudness,
+                    "duration_ms": duration_ms,
+                }
+            ]
+        )
+        features = preprocess_features(df)
+        with torch.no_grad():
+            pred = model(features).cpu().numpy()
+        pred_vals = pred.squeeze()
+        if pred_vals.shape == ():
+            return f"Prediction: {float(pred_vals):.2f}"
+        return html.Div(
+            [
+                html.Div("Prediction:", style={"marginBottom": "6px"}),
+                html.Ul([html.Li(f"{i + 1}: {v:.2f}") for i, v in enumerate(pred_vals.tolist())]),
+            ]
+        )
+    except Exception as e:
+        return f"Error generating prediction: {e}"
+
+
+@app.callback(
+    Output("batch-output", "children"),
+    Input("upload-data", "contents"),
+    State("upload-data", "filename"),
+    prevent_initial_call=True,
+)
+def predict_batch(contents, filename):
+    if contents is None:
+        return "No file uploaded."
+    if model is None:
+        return f"Model not loaded: {model_load_error}"
+
+    try:
+        content_type, content_string = contents.split(",")
+        decoded = base64.b64decode(content_string)
+        is_npz = filename.lower().endswith(".npz") if filename else False
+
+        if is_npz:
+            features_tensor = prepare_logmel_tensor(
+                decoded, target_frames=target_frames, n_mels=128
+            )
+            with torch.no_grad():
+                preds = model(features_tensor).cpu().numpy()
+            preds = denormalize_predictions(preds)
+            preds_flat = preds.squeeze()
+
+            # For NPZ we show predictions with target names when available
+            if preds_flat.shape == ():
+                data_rows = [{"prediction": float(preds_flat)}]
+            elif preds_flat.ndim == 0:
+                data_rows = [{"prediction": float(preds_flat)}]
+            elif preds_flat.ndim == 1:
+                preds_flat = clamp_logs(preds_flat)
+                row = {}
+                for i, v in enumerate(preds_flat.tolist()):
+                    name = target_names[i] if i < len(target_names) else f"prediction_{i + 1}"
+                    row[name] = float(v)
+                    if name.endswith("_log"):
+                        base = name.replace("_log", "")
+                        row[base] = float(np.expm1(v))
+                        stats = target_stats.get(name, {})
+                        mu, sd = stats.get("mean"), stats.get("std")
+                        if mu is not None and sd is not None and sd > 0:
+                            z = (v - mu) / sd
+                            row[f"{base}_percentile"] = round(normal_percentile(z), 1)
+                data_rows = [row]
+            else:
+                data_rows = []
+                for row_vals in preds:
+                    row_vals = clamp_logs(np.array(row_vals))
+                    row = {}
+                    for i, v in enumerate(row_vals.tolist()):
+                        name = target_names[i] if i < len(target_names) else f"prediction_{i + 1}"
+                        row[name] = float(v)
+                        if name.endswith("_log"):
+                            base = name.replace("_log", "")
+                            row[base] = float(np.expm1(v))
+                            stats = target_stats.get(name, {})
+                            mu, sd = stats.get("mean"), stats.get("std")
+                            if mu is not None and sd is not None and sd > 0:
+                                z = (v - mu) / sd
+                                row[f"{base}_percentile"] = round(normal_percentile(z), 1)
+                    data_rows.append(row)
+            return dash_table.DataTable(
+                data=data_rows[:200],
+                page_size=10,
+                style_table={"overflowX": "auto"},
+                style_header={
+                    "backgroundColor": "#0b2f59",
+                    "color": "white",
+                    "fontWeight": "bold",
+                },
+            )
+        else:
+            df = pd.read_csv(io.BytesIO(decoded))
+            features = preprocess_features(df)
+            with torch.no_grad():
+                preds = model(features).cpu().numpy()
+            preds = denormalize_predictions(preds)
+            preds_flat = preds.squeeze()
+
+            df_out = df.copy()
+            if preds_flat.shape == ():
+                df_out["prediction"] = float(preds_flat)
+            elif preds_flat.ndim == 0:
+                df_out["prediction"] = float(preds_flat)
+            elif preds_flat.ndim == 1:
+                preds_flat = clamp_logs(preds_flat)
+                for i, v in enumerate(preds_flat.tolist()):
+                    name = target_names[i] if i < len(target_names) else f"prediction_{i + 1}"
+                    df_out[name] = float(v)
+                    if name.endswith("_log"):
+                        base = name.replace("_log", "")
+                        df_out[base] = float(np.expm1(v))
+                        stats = target_stats.get(name, {})
+                        mu, sd = stats.get("mean"), stats.get("std")
+                        if mu is not None and sd is not None and sd > 0:
+                            z = (v - mu) / sd
+                            df_out[f"{base}_percentile"] = round(normal_percentile(z), 1)
+            else:
+                for i in range(preds.shape[1]):
+                    name = target_names[i] if i < len(target_names) else f"prediction_{i + 1}"
+                    col_vals = clamp_logs(preds[:, i])
+                    df_out[name] = col_vals
+                    if name.endswith("_log"):
+                        base = name.replace("_log", "")
+                        df_out[base] = np.expm1(col_vals)
+                        stats = target_stats.get(name, {})
+                        mu, sd = stats.get("mean"), stats.get("std")
+                        if mu is not None and sd is not None and sd > 0:
+                            z = (col_vals - mu) / sd
+                            df_out[f"{base}_percentile"] = normal_percentile(z)
+
+            return dash_table.DataTable(
+                data=df_out.head(200).to_dict("records"),
+                page_size=10,
+                style_table={"overflowX": "auto"},
+                style_header={
+                    "backgroundColor": "#0b2f59",
+                    "color": "white",
+                    "fontWeight": "bold",
+                },
+            )
+    except Exception as e:
+        return f"Error processing {filename}: {e}"
+
+
+@app.callback(
+    Output("audio-output", "children"),
+    Input("upload-audio", "contents"),
+    State("upload-audio", "filename"),
+    prevent_initial_call=True,
+)
+def predict_audio(contents, filename):
+    if contents is None:
+        return "No audio file uploaded."
+    if model is None:
+        return f"Model not loaded: {model_load_error}"
+    try:
+        content_type, content_string = contents.split(",")
+        decoded = base64.b64decode(content_string)
+        features_tensor = logmel_from_audio_bytes(decoded, target_frames=target_frames)
+        with torch.no_grad():
+            preds = model(features_tensor).cpu().numpy()
+        preds = denormalize_predictions(preds)
+        preds_flat = preds.squeeze()
+
+        pred_row = {}
+        if preds_flat.ndim == 0:
+            pred_row["prediction"] = float(preds_flat)
+        elif preds_flat.ndim == 1:
+            preds_flat = clamp_logs(preds_flat)
+            for i, v in enumerate(preds_flat.tolist()):
+                name = target_names[i] if i < len(target_names) else f"prediction_{i + 1}"
+                pred_row[name] = float(v)
+                if name.endswith("_log"):
+                    base = name.replace("_log", "")
+                    pred_row[base] = float(np.expm1(v))
+                    stats = target_stats.get(name, {})
+                    mu, sd = stats.get("mean"), stats.get("std")
+                    if mu is not None and sd is not None and sd > 0:
+                        z = (v - mu) / sd
+                        pred_row[f"{base}_percentile"] = round(normal_percentile(z), 1)
+
+        rec_table = None
+        if rec_matrix is not None and target_names:
+            sim_cols = []
+            sim_vec = []
+            for col in ["Views", "Likes", "Comments"]:
+                log_name = f"{col.lower()}_log"
+                if log_name in target_names:
+                    idx = target_names.index(log_name)
+                    sim_cols.append(col)
+                    sim_vec.append(preds_flat[idx])
+            if sim_vec and len(sim_vec) == rec_matrix.shape[1]:
+                sim_vec = np.array(sim_vec, dtype=float)
+                rec_norm = np.linalg.norm(rec_matrix, axis=1, keepdims=True) + 1e-8
+                vec_norm = np.linalg.norm(sim_vec) + 1e-8
+                sims = (rec_matrix @ sim_vec) / (rec_norm.flatten() * vec_norm)
+                top_idx = np.argsort(sims)[::-1][:5]
+                rows = []
+                for i in top_idx:
+                    row = {"score": float(sims[i])}
+                    if rec_meta is not None:
+                        for c in rec_meta.columns:
+                            row[c] = rec_meta.iloc[i][c]
+                    for c in rec_feature_cols:
+                        row[c] = float(clean_data.iloc[i][c])
+                    rows.append(row)
+                rec_table = dash_table.DataTable(
+                    data=rows,
+                    page_size=5,
+                    style_table={"overflowX": "auto"},
+                    style_header={
+                        "backgroundColor": "#0b2f59",
+                        "color": "white",
+                        "fontWeight": "bold",
+                    },
+                )
+
+        return html.Div(
+            [
+                html.H4(f"Prediction from {filename}", style={"color": "#0b2f59"}),
+                dash_table.DataTable(
+                    data=[pred_row],
+                    page_size=1,
+                    style_table={"overflowX": "auto"},
+                    style_header={
+                        "backgroundColor": "#0b2f59",
+                        "color": "white",
+                        "fontWeight": "bold",
+                    },
+                ),
+                html.Br(),
+                html.H4("Similar songs (by engagement profile)", style={"color": "#0b2f59"}),
+                rec_table or html.Div("Not enough data for recommendations."),
+            ]
+        )
+    except Exception as e:
+        return f"Error processing {filename}: {e}"
 
 
 # =========================================================
