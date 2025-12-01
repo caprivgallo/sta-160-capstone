@@ -9,6 +9,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import librosa
+import requests
 from dash import Dash, dcc, html, Input, Output, State, dash_table, callback_context
 # =========================================================
 # LOAD & CLEAN DATA  (SUMMARY TAB)
@@ -95,6 +96,7 @@ XGB_SCALER_PATH = "xgb_scaler.pkl"
 xgb_pop_model = None
 xgb_market_model = None
 xgb_scaler = None
+GENIUS_TOKEN = os.environ.get("GENIUS_API_TOKEN")
 SR = 16000
 N_FFT = 512
 HOP = 160
@@ -390,6 +392,28 @@ def clamp_logs(pred_flat):
 def normal_percentile(z):
     """Approximate percentile from z-score using error function."""
     return 50 * (1 + math.erf(z / math.sqrt(2)))
+
+
+# Genius lyrics helper
+def fetch_lyrics_url(title, artist=None):
+    if not GENIUS_TOKEN:
+        return "GENIUS_API_TOKEN not set"
+    query = f"{title} {artist}" if artist else title
+    try:
+        resp = requests.get(
+            "https://api.genius.com/search",
+            params={"q": query},
+            headers={"Authorization": f"Bearer {GENIUS_TOKEN}"},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        hits = resp.json().get("response", {}).get("hits", [])
+        if not hits:
+            return "No lyrics found"
+        top = hits[0]["result"]
+        return top.get("url", "No URL returned")
+    except Exception as e:
+        return f"Genius lookup failed: {e}"
 
 
 # XGB feature selection helper (based on model_data)
@@ -843,6 +867,30 @@ def render_tab(selected):
                                 "fontWeight": "bold",
                             },
                         ),
+                        html.Br(),
+                        html.H4("Lyrics lookup (Genius)", style={"color": "#0b2f59"}),
+                        html.Div(
+                            style={"display": "grid", "gridTemplateColumns": "repeat(auto-fit, minmax(220px, 1fr))", "gap": "10px"},
+                            children=[
+                                dcc.Input(id="lyrics-title", type="text", placeholder="Song title"),
+                                dcc.Input(id="lyrics-artist", type="text", placeholder="Artist (optional)"),
+                            ],
+                        ),
+                        html.Button(
+                            "Find Lyrics",
+                            id="lyrics-button",
+                            n_clicks=0,
+                            style={
+                                "marginTop": "10px",
+                                "backgroundColor": "#0b2f59",
+                                "color": "white",
+                                "padding": "8px 14px",
+                                "borderRadius": "8px",
+                                "border": "none",
+                                "cursor": "pointer",
+                            },
+                        ),
+                        html.Div(id="lyrics-output", style={"marginTop": "8px"}),
                     ],
                 ),
 
@@ -1549,6 +1597,22 @@ def run_xgb_upload(contents, filename):
         )
     except Exception as e:
         return f"Error running XGB inference on {filename}: {e}"
+
+
+@app.callback(
+    Output("lyrics-output", "children"),
+    Input("lyrics-button", "n_clicks"),
+    State("lyrics-title", "value"),
+    State("lyrics-artist", "value"),
+    prevent_initial_call=True,
+)
+def get_lyrics_url(n_clicks, title, artist):
+    if not title or not title.strip():
+        return "Please enter a song title."
+    url = fetch_lyrics_url(title.strip(), artist.strip() if artist else None)
+    if url.startswith("http"):
+        return html.A("View lyrics on Genius", href=url, target="_blank")
+    return url
 # =========================================================
 # CALLBACK: FILTERING FOR MODEL TABLE (PREDICTIONS)
 # =========================================================

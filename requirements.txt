@@ -8,3 +8,4 @@ librosa
 soundfile
 xgboost
 scikit-learn
+requests
