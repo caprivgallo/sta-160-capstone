@@ -605,7 +605,7 @@ app.layout = html.Div(
 		dcc.Tab(label="Deep Learning Model", value="model"),
 		dcc.Tab(label="Visuals", value="visuals"),	
 		dcc.Tab(label="Final Report Summary", value="report"),
-		dcc.Tab(label="Team & Acknowledgments", value="team),
+		dcc.Tab(label="Team & Acknowledgments", value="team"), 
 
 
 
