@@ -118,11 +118,16 @@ app.layout = html.Div(
             value="summary",
             colors={"border": "#0b2f59", "primary": "#0b2f59", "background": "#faf7f7"},
             children=[
-                dcc.Tab(label="Summary Statistics", value="summary"),
-                dcc.Tab(label="Deep Learning Model", value="model"),
-                dcc.Tab(label="Visuals", value="visuals"),
-                dcc.Tab(label="Final Report Summary", value="report"),
-                dcc.Tab(label="Team & Acknowledgments", value="team"),
+		dcc.Tab(label="Introduction", value="intro"),
+		dcc.Tab(label="Summary Statistics", value="summary"),
+		dcc.Tab(label="Deep Learning Model", value="model"),
+		dcc.Tab(label="Visuals", value="visuals"),	
+		dcc.Tab(label="Final Report Summary", value="report"),
+		dcc.Tab(label="Team & Acknowledgments", value="team),
+
+
+
+
             ],
         ),
 
@@ -156,7 +161,59 @@ def render_tab(selected):
 
     # ------------------------------------------------------
     # SUMMARY STATISTICS TAB
-    # ------------------------------------------------------
+if selected == "intro":
+    return html.Div(
+        style={
+            "maxWidth": "1000px",
+            "margin": "auto",
+            "lineHeight": "1.8",
+        },
+        children=[
+            html.H2("Introduction", style={"color": "#0b2f59"}),
+
+            html.P(
+                """
+                In today’s music industry, success is increasingly shaped by digital platforms such as 
+                Spotify and YouTube, where millions of songs compete for listener attention. While artistic 
+                creativity remains central to music production, a song’s popularity is often influenced by 
+                measurable audio characteristics, listener behavior, and platform-driven dynamics. 
+                Understanding what drives popularity has become both a creative and analytical challenge 
+                for artists, producers, and record labels.
+                """,
+            ),
+
+            html.P(
+                """
+                The purpose of this project is to examine which song-level features best predict popularity 
+                and to assess whether data-driven models can reliably explain success in modern streaming 
+                environments. By integrating Spotify audio features with YouTube engagement metrics, we 
+                investigate how musical structure and listener response interact across platforms.
+                """,
+            ),
+
+            html.P(
+                """
+                Our approach combines exploratory data analysis, statistical modeling, and machine learning. 
+                We first clean and merge large-scale Spotify and YouTube datasets, then evaluate relationships 
+                between musical attributes such as tempo, energy, loudness, and duration and audience 
+                engagement measures including views, likes, and comments. We apply regression techniques, 
+                regularization methods, and deep learning models to assess predictive performance, using 
+                cross-validation metrics to evaluate accuracy.
+                """,
+            ),
+
+            html.P(
+                """
+                The results indicate that while certain audio features are consistently associated with 
+                engagement, musical characteristics alone explain only a limited portion of popularity. 
+                This finding highlights the importance of external factors such as artist visibility, 
+                promotion, and platform algorithms, which are not captured in audio signals. To make these 
+                insights accessible, we developed an interactive dashboard that allows users to explore 
+                data patterns, compare songs, and understand the strengths and limitations of predictive models.
+                """
+            ),
+        ],
+    )    # ------------------------------------------------------
     if selected == "summary":
         return html.Div(
             [
@@ -267,126 +324,80 @@ def render_tab(selected):
     # ------------------------------------------------------
     # FINAL REPORT SUMMARY TAB (UPDATED)
     # ------------------------------------------------------
-    elif selected == "report":
-        return html.Div(
-            [
-                html.H2("Final Report Summary", style={"color": "#0b2f59"}),
+elif selected == "report":
+    return html.Div(
+        style={
+            "maxWidth": "1000px",
+            "margin": "auto",
+            "lineHeight": "1.8",
+        },
+        children=[
+            html.H2("Final Report Summary", style={"color": "#0b2f59"}),
 
-                # ABSTRACT
-                html.H3("Abstract", style={"color": "#0b2f59"}),
-                html.P(
-                    """
-                    Our project analyzes a combined Spotify–YouTube dataset to identify the musical 
-                    and engagement features that best predict song popularity. The dataset integrates 
-                    Spotify audio attributes (such as danceability, energy, tempo, and valence) with 
-                    YouTube metrics (views, likes, comments), enabling both exploratory and predictive modeling. 
-                    Our final models demonstrate strong predictive power, and the dashboard provides 
-                    actionable insights for artists, producers, and record labels.
-                    """,
-                    style={"fontSize": "16px"},
+            html.H3("Abstract", style={"color": "#0b2f59"}),
+            html.P(
+                """
+                This project analyzes a combined Spotify–YouTube dataset to identify musical and engagement 
+                features that best predict song popularity. By integrating audio attributes such as tempo, 
+                energy, and loudness with listener engagement metrics, we conduct both exploratory analysis 
+                and predictive modeling. While several features show meaningful associations with popularity, 
+                the results demonstrate that audio characteristics alone provide limited predictive power, 
+                highlighting the role of external social and platform-driven factors.
+                """
+            ),
+
+            html.H3("Motivation", style={"color": "#0b2f59"}),
+            html.P(
+                """
+                With the rapid growth of streaming platforms, understanding what drives song popularity 
+                has become increasingly important. Millions of tracks are released each year, yet only 
+                a small fraction achieve widespread success. This project seeks to identify which 
+                quantifiable song-level characteristics contribute to popularity and how predictive 
+                modeling can support decision-making in the music industry.
+                """
+            ),
+
+            html.H3("Methodology", style={"color": "#0b2f59"}),
+            html.P(
+                """
+                We merged Spotify audio features with YouTube engagement data and conducted extensive data 
+                cleaning and preprocessing. Our analysis included exploratory visualization, regression 
+                modeling, regularization techniques, similarity analysis, and deep learning models using 
+                learned audio embeddings. Model performance was evaluated through cross-validation to 
+                assess generalizability.
+                """
+            ),
+
+            html.H3("Key Findings", style={"color": "#0b2f59"}),
+            html.P(
+                """
+                Tracks with consistent tempo, moderate loudness, higher energy, and specific stylistic 
+                characteristics tend to exhibit greater engagement. However, even advanced audio-based 
+                models show limited predictive accuracy, indicating that popularity is strongly influenced 
+                by non-audio factors such as artist recognition, marketing, and algorithmic promotion.
+                """
+            ),
+
+            html.Br(),
+
+            html.Div(
+                html.A(
+                    "📄 View Full Final Report (Google Doc)",
+                    href="https://docs.google.com/document/d/1wYoX1HOKK6wEcU_JRXqQMJ0NLWfyZAwa5gW9crADFms/edit?usp=sharing",
+                    target="_blank",
+                    style={
+                        "backgroundColor": "#0b2f59",
+                        "color": "white",
+                        "padding": "12px 24px",
+                        "borderRadius": "8px",
+                        "textDecoration": "none",
+                        "fontWeight": "bold",
+                    },
                 ),
-
-                # MOTIVATION
-                html.H3("Motivation", style={"color": "#0b2f59"}),
-                html.P(
-                    """
-                    In an industry driven by streaming algorithms, understanding the components of 
-                    song popularity is essential. By integrating musical structure with listener 
-                    behavior, we aimed to identify what characteristics help songs succeed across 
-                    major streaming platforms. Our core research question was:
-
-                    “What song-level features best predict popularity, and how can predictive modeling 
-                    support decision-making in the music industry?”
-                    """,
-                    style={"fontSize": "16px", "whiteSpace": "pre-line"},
-                ),
-
-                # METHODOLOGY
-                html.H3("Methodology", style={"color": "#0b2f59"}),
-                html.P(
-                    """
-                    We combined Spotify audio features with YouTube engagement data and performed:
-
-                    • Extensive data cleaning  
-                    • Exploratory data analysis  
-                    • Regression, LASSO, and model selection  
-                    • Deep learning model development  
-                    • Feature engineering (interactions, embeddings, scaled variables)  
-                    • Similarity and clustering analysis  
-
-                    This framework ensured interpretability, predictive accuracy, and scalability.
-                    """,
-                    style={"fontSize": "16px", "whiteSpace": "pre-line"},
-                ),
-
-                # RESULTS
-                html.H3("Results", style={"color": "#0b2f59"}),
-                html.P(
-                    """
-                    Two major predictive models were developed:
-
-                    • Popularity Model → R² ≈ 0.656, MAE ≈ 5.02  
-                    • Marketability Model → R² ≈ 0.698, MAE ≈ 2.02  
-
-                    Engagement metrics produced the strongest signals, but audio features—especially 
-                    energy, tempo, and danceability—were still significant contributors.
-
-                    The hybrid similarity matrix revealed structured clusters of songs that share both 
-                    acoustic and engagement characteristics.
-                    """,
-                    style={"fontSize": "16px", "whiteSpace": "pre-line"},
-                ),
-
-                # INTERPRETATION
-                html.H3("Interpretation", style={"color": "#0b2f59"}),
-                html.P(
-                    """
-                    Engagement signals dominated prediction, demonstrating the power of consumer behavior 
-                    in shaping music success. However, audio features added valuable nuance, showing that 
-                    musical structure influences how listeners interact with songs.
-
-                    Songs with consistent rhythm, moderate loudness, and high energy performed noticeably 
-                    better across metrics.
-                    """,
-                    style={"fontSize": "16px", "whiteSpace": "pre-line"},
-                ),
-
-                # CONCLUSION
-                html.H3("Conclusion", style={"color": "#0b2f59"}),
-                html.P(
-                    """
-                    Our modeling framework effectively captures both musical characteristics and listener 
-                    behavior. The models we developed provide practical insights for forecasting song 
-                    performance and strengthening data-driven decision-making in the modern music industry.
-
-                    A full version of the report—including extended methodology, visualizations, and 
-                    discussion—is available below.
-                    """,
-                    style={"fontSize": "16px", "whiteSpace": "pre-line"},
-                ),
-
-                html.Br(),
-
-                # FULL REPORT LINK
-                html.Div(
-                    html.A(
-                        "📄 View Full Final Report (Google Doc)",
-                        href="https://docs.google.com/document/d/1wYoX1HOKK6wEcU_JRXqQMJ0NLWfyZAwa5gW9crADFms/edit?usp=sharing",
-                        target="_blank",
-                        style={
-                            "backgroundColor": "#0b2f59",
-                            "color": "white",
-                            "padding": "12px 20px",
-                            "borderRadius": "8px",
-                            "textDecoration": "none",
-                            "fontWeight": "bold",
-                        },
-                    ),
-                    style={"textAlign": "center"},
-                ),
-            ]
-        )
-
+                style={"textAlign": "center"},
+            ),
+        ],
+    )
     # ------------------------------------------------------
     # TEAM & ACKNOWLEDGMENTS TAB
     # ------------------------------------------------------
