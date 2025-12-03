@@ -2,3 +2,11 @@ dash
 pandas
 gunicorn
 dash-bootstrap-components
+torch
+numpy
+librosa
+soundfile
+xgboost
+scikit-learn
+requests
+resampy

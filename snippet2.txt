@@ -1,0 +1,120 @@
+import base64
+import io
+import os
+import tempfile
+import math
+import joblib
+import pandas as pd
+import numpy as np
+import torch
+import torch.nn as nn
+import librosa
+import requests
+from dash import Dash, dcc, html, Input, Output, State, dash_table, callback_context
+from pipeline import get_youtube_stats
+# =========================================================
+# LOAD & CLEAN DATA  (SUMMARY TAB)
+# =========================================================
+
+data = pd.read_csv("merged_final_data.csv")
+
+# Clean tempo values
+data["tempo"] = (
+    data["tempo"]
+    .astype(str)
+    .str.replace("[", "", regex=False)
+    .str.replace("]", "", regex=False)
+    .astype(float)
+)
+
+# Ensure numeric fields
+data["energy"] = pd.to_numeric(data["energy"], errors="coerce")
+
+# Convert duration_ms 鈫 minutes
+data["duration_min"] = (data["duration_ms"] / 60000).round(2)
+
+# Remove missing rows
+clean_data = data.dropna(subset=["tempo", "energy"])
+
+# Dropdown options for SUMMARY tab
+artist_options = [
+    {"label": artist, "value": artist}
+    for artist in sorted(clean_data["Artist"].dropna().unique())
+]
+
+# Precompute recommendation matrix (log space for Views/Likes/Comments)
+rec_feature_cols = [c for c in ["Views", "Likes", "Comments"] if c in clean_data.columns]
+rec_meta_cols = [c for c in ["Artist", "Track"] if c in clean_data.columns]
+rec_matrix = None
+rec_meta = None
+if rec_feature_cols:
+    rec_matrix = np.log1p(clean_data[rec_feature_cols].fillna(0).to_numpy())
+    rec_meta = clean_data[rec_meta_cols] if rec_meta_cols else None
+
+# =========================================================
+# LOAD MODEL DATA (PREDICTIONS FOR DEEP LEARNING TAB)
+# =========================================================
+
+# CSV without embeddings, but WITH Predicted_Popularity & Predicted_Marketability
+model_data = pd.read_csv("merged_no_embeddings.csv")
+
+# Dropdown options for MODEL tab (artists)
+model_artist_options = [
+    {"label": artist, "value": artist}
+    for artist in sorted(model_data["Artist"].dropna().unique())
+]
+
+# Dropdown options for MODEL tab (albums) 鈥 only if column exists
+if "Album" in model_data.columns:
+    model_album_options = [
+        {"label": album, "value": album}
+        for album in sorted(model_data["Album"].dropna().unique())
+    ]
+else:
+    model_album_options = []
+
+# XGB feature columns derived from model_data
+xgb_target_cols = ["Predicted_Popularity", "Predicted_Marketability"]
+numeric_cols = model_data.select_dtypes(include=["float", "int"]).columns.tolist()
+drop_cols = set(xgb_target_cols + ["Spotify_Track_Popularity", "Marketability"])
+xgb_feature_cols = [c for c in numeric_cols if c not in drop_cols]
+
+# =========================================================
+# DASH APP SETUP
+# =========================================================
+
+app = Dash(__name__, suppress_callback_exceptions=True)
+server = app.server  # Required for Render
+app.title = "The Science of Song Success"
+
+# =========================================================
+# MODEL LOADING (PyTorch)
+# =========================================================
+
+MODEL_PATH = "best_model_robust.pt"
+DEVICE = "cpu"
+checkpoint = None
+target_frames = 768
+target_names = []
+target_stats = {}
+XGB_MODEL_POP_PATH = "xgb_popularity.pkl"
+XGB_MODEL_MARKET_PATH = "xgb_marketability.pkl"
+XGB_SCALER_PATH = "xgb_scaler.pkl"
+xgb_pop_model = None
+xgb_market_model = None
+xgb_scaler = None
+GENIUS_TOKEN = os.environ.get("GENIUS_API_TOKEN")
+SR = 16000
+N_FFT = 512
+HOP = 160
+WIN = 400
+N_MELS = 128
+FMIN = 20
+FMAX = 8000
+POWER = 2.0
+EPS = 1e-10
+
+try:
+    # Try TorchScript first
+    model = torch.jit.load(MODEL_PATH, map_location=DEVICE)
+    model.eval()

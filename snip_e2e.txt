@@ -1,0 +1,45 @@
+    State("xgb-song-artist", "value"),
+    State("xgb-audio", "contents"),
+    State("xgb-audio", "filename"),
+    prevent_initial_call=True,
+)
+def run_xgb_e2e(n_clicks, title, artist, contents, filename):
+    try:
+        if xgb_pop_model is None or xgb_market_model is None or xgb_scaler is None:
+            return "XGB artifacts not loaded. Ensure xgb_popularity.pkl, xgb_marketability.pkl, xgb_scaler.pkl are in the repo root."
+        if not title or not title.strip():
+            return "Please provide a song title."
+        if not xgb_feature_cols:
+            return "XGB feature columns not available."
+
+        yt_stats = get_youtube_stats(title.strip(), artist.strip() if artist else None)
+        lyrics_link = fetch_lyrics_url(title.strip(), artist.strip() if artist else None)
+
+        audio_feats = {}
+        audio_err = None
+        if contents:
+            try:
+                _, content_string = contents.split(",")
+                decoded = base64.b64decode(content_string)
+                audio_feats = compute_basic_audio_features(decoded)
+            except Exception as e:
+                audio_err = f"Audio feature extraction failed: {e}"
+                audio_feats = {}
+        else:
+            audio_err = "No audio provided; using defaults for audio features."
+
+        row = build_xgb_feature_row(audio_feats, yt_stats)
+        df_row = pd.DataFrame([[row.get(col, 0.0) for col in xgb_feature_cols]], columns=xgb_feature_cols)
+        df_scaled = xgb_scaler.transform(df_row)
+        pop_pred = xgb_pop_model.predict(df_scaled)[0]
+        mkt_pred = xgb_market_model.predict(df_scaled)[0]
+
+        details = [
+            html.P(f"Predicted Popularity: {pop_pred:.2f}"),
+            html.P(f"Predicted Marketability: {mkt_pred:.2f}"),
+        ]
+        if yt_stats and not yt_stats.get("error"):
+            d = yt_stats["data"]
+            details.append(html.P(f"YouTube stats - Views: {d.get('views')}, Likes: {d.get('likes')}, Comments: {d.get('comments')}"))
+        elif yt_stats and yt_stats.get("error"):
+            details.append(html.P(f"YouTube stats error: {yt_stats['error']}"))
