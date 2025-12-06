@@ -7,7 +7,8 @@ import pandas as pd
 import numpy as np
 import librosa
 import requests
-from dash import Dash, dcc, html, Input, Output, State, dash_table, callback_context
+from dash import Dash, dcc, html, Input, Output, State, dash_table, callback_context, no_update
+import xgboost as xgb
 from pipeline import get_youtube_stats
 # =========================================================
 # LOAD & CLEAN DATA  (SUMMARY TAB)
@@ -156,12 +157,12 @@ def compute_basic_audio_features(raw_bytes, max_duration=10.0):
     }
 
 
-def build_xgb_feature_row(audio_feats, yt_stats):
+def build_xgb_feature_row(base_row, audio_feats, yt_stats):
     """
     Build a feature dict aligned to xgb_feature_cols.
-    Fills missing fields with zeros.
+    Start from base_row (e.g., a matched catalog row) then overlay audio/yt stats.
     """
-    row = {k: 0.0 for k in xgb_feature_cols}
+    row = dict(base_row) if base_row else {k: 0.0 for k in xgb_feature_cols}
     if audio_feats:
         for k, v in audio_feats.items():
             if k in row:
@@ -181,6 +182,36 @@ def build_xgb_feature_row(audio_feats, yt_stats):
         if "comment_view_ratio" in row: row["comment_view_ratio"] = comments / (views + 1)
         if "engagement_rate" in row: row["engagement_rate"] = (likes + comments) / (views + 1)
     return row
+
+
+
+
+def match_catalog_row(title, artist):
+    """
+    Try to find a matching row in model_data using title (and optional artist).
+    Returns a dict of feature values or None.
+    """
+    if not title or model_data is None:
+        return None
+    if "Track" not in model_data.columns:
+        return None
+    df = model_data
+    title_lower = title.strip().lower()
+    mask = df["Track"].astype(str).str.lower() == title_lower
+    if artist and "Artist" in df.columns:
+        artist_lower = artist.strip().lower()
+        mask = mask & (df["Artist"].astype(str).str.lower() == artist_lower)
+    matches = df[mask]
+    if matches.empty:
+        mask = df["Track"].astype(str).str.lower().str.contains(title_lower, na=False)
+        if artist and "Artist" in df.columns:
+            artist_lower = artist.strip().lower()
+            mask = mask & df["Artist"].astype(str).str.lower().str.contains(artist_lower, na=False)
+        matches = df[mask]
+    if matches.empty:
+        return None
+    row = matches.iloc[0]
+    return {col: row[col] for col in xgb_feature_cols if col in row}
 
 
 # Genius lyrics helper
@@ -309,10 +340,10 @@ app.layout = html.Div(
             children=[
                 dcc.Tab(label="Introduction", value="intro"),
                 dcc.Tab(label="Summary Statistics", value="summary"),
-		dcc.Tab(label="Deep Learning Model", value="model"),
-		dcc.Tab(label="Visuals", value="visuals"),	
-		dcc.Tab(label="Final Report Summary", value="report"),
-		dcc.Tab(label="Team & Acknowledgments", value="team"), 
+                dcc.Tab(label="Model", value="model"),
+                dcc.Tab(label="Visuals", value="visuals"),
+                dcc.Tab(label="Final Report Summary", value="report"),
+                dcc.Tab(label="Team & Acknowledgments", value="team"),
 
 
 
@@ -465,10 +496,14 @@ def render_tab(selected):
     elif selected == "model":
         return html.Div(
             [
-                html.H2("Model Predictions (XGBoost)", style={"color": "#0b2f59"}),
+                html.H2("Model", style={"color": "#0b2f59"}),
                 html.P(
                     "View precomputed popularity and marketability scores from our XGBoost models or run them on your own CSV.",
                     style={"fontSize": "17px"},
+                ),
+                html.P(
+                    "Tip: include the song title (and artist) so we can fetch YouTube stats and lyrics for better context.",
+                    style={"fontSize": "13px", "color": "#444"},
                 ),
                 html.Div(
                     style={"display": "grid", "gridTemplateColumns": "repeat(auto-fit, minmax(200px, 1fr))", "gap": "10px"},
@@ -565,7 +600,7 @@ def render_tab(selected):
                 html.Div(
                     style={"display": "grid", "gridTemplateColumns": "repeat(auto-fit, minmax(220px, 1fr))", "gap": "10px"},
                     children=[
-                        dcc.Input(id="xgb-song-title", type="text", placeholder="Song title"),
+                        dcc.Input(id="xgb-song-title", type="text", placeholder="Song title (recommended)"),
                         dcc.Input(id="xgb-song-artist", type="text", placeholder="Artist (optional)"),
                     ],
                 ),
@@ -917,37 +952,46 @@ def get_lyrics_url(n_clicks, title, artist):
 
 @app.callback(
     [Output("xgb-e2e-output", "children"), Output("xgb-audio-status", "children")],
-    Input("xgb-e2e-button", "n_clicks"),
+    [Input("xgb-e2e-button", "n_clicks"), Input("xgb-audio", "contents")],
     State("xgb-song-title", "value"),
     State("xgb-song-artist", "value"),
-    State("xgb-audio", "contents"),
     State("xgb-audio", "filename"),
     prevent_initial_call=True,
 )
-def run_xgb_e2e(n_clicks, title, artist, contents, filename):
+def run_xgb_e2e(n_clicks, contents, title, artist, filename):
     try:
+        triggered = callback_context.triggered[0]["prop_id"].split(".")[0] if callback_context.triggered else ""
+        # Handle pure upload event: show a success message without running model
+        if triggered == "xgb-audio":
+            if contents and filename:
+                return no_update, f"Uploaded file: {filename}"
+            if contents:
+                return no_update, "File uploaded."
+            return no_update, ""
+
+        # Handle run button click
         if xgb_pop_model is None or xgb_market_model is None or xgb_scaler is None:
-            return "XGB artifacts not loaded. Ensure xgb_popularity.pkl, xgb_marketability.pkl, xgb_scaler.pkl are in the repo root.", ""
-        # Title/artist optional: if missing, skip external lookups
+            return "XGB artifacts not loaded. Ensure xgb_popularity.pkl, xgb_marketability.pkl, xgb_scaler.pkl are in the repo root.", "Artifacts missing."
         title_val = title.strip() if title else ""
         artist_val = artist.strip() if artist else ""
         if not xgb_feature_cols:
-            return "XGB feature columns not available.", ""
+            return "XGB feature columns not available.", "Missing feature columns."
 
         yt_stats = {"error": "Skipped (no title/artist)", "data": {}} if not title_val else get_youtube_stats(title_val, artist_val or None)
         lyrics_link = None
         if title_val:
             lyrics_link = fetch_lyrics_url(title_val, artist_val or None)
 
+        base_row = match_catalog_row(title_val, artist_val)
         audio_feats = {}
         audio_err = None
-        status_text = ""
+        status_text = "Analyzing..."
         if contents:
             try:
                 _, content_string = contents.split(",")
                 decoded = base64.b64decode(content_string)
-                status_text = "Uploading and analyzing audio..."
                 audio_feats = compute_basic_audio_features(decoded)
+                status_text = f"Analyzed audio from {filename or 'upload'}."
             except Exception as e:
                 audio_err = f"Audio feature extraction failed: {e}"
                 audio_feats = {}
@@ -956,7 +1000,7 @@ def run_xgb_e2e(n_clicks, title, artist, contents, filename):
             audio_err = "No audio provided; using defaults for audio features."
             status_text = "No audio uploaded; using metadata only."
 
-        row = build_xgb_feature_row(audio_feats, yt_stats)
+        row = build_xgb_feature_row(base_row, audio_feats, yt_stats)
         df_row = pd.DataFrame([[row.get(col, 0.0) for col in xgb_feature_cols]], columns=xgb_feature_cols)
         df_scaled = xgb_scaler.transform(df_row)
         pop_pred = xgb_pop_model.predict(df_scaled)[0]
@@ -977,6 +1021,85 @@ def run_xgb_e2e(n_clicks, title, artist, contents, filename):
             details.append(html.A("View lyrics on Genius", href=lyrics_link, target="_blank"))
         elif lyrics_link:
             details.append(html.P(f"Lyrics: {lyrics_link}"))
+
+        # Percentiles and nearest neighbors for context
+        pct_parts = []
+        nn_lines = []
+        if "Predicted_Popularity" in model_data.columns and "Predicted_Marketability" in model_data.columns:
+            pop_series = model_data["Predicted_Popularity"].dropna()
+            mkt_series = model_data["Predicted_Marketability"].dropna()
+            if len(pop_series) > 0:
+                pop_pct = float((pop_series < pop_pred).mean() * 100)
+                pct_parts.append(f"Popularity is around the {pop_pct:.1f}th percentile of the catalog.")
+                pop_diff = (pop_series - pop_pred).abs()
+                nn_idx = pop_diff.nsmallest(3).index
+                for i in nn_idx:
+                    row_nn = model_data.loc[i]
+                    nn_lines.append(f"Similar popularity: {row_nn.get('Artist','?')} - {row_nn.get('Track','?')} ({row_nn.get('Predicted_Popularity',0):.2f})")
+            if len(mkt_series) > 0:
+                mkt_pct = float((mkt_series < mkt_pred).mean() * 100)
+                pct_parts.append(f"Marketability is around the {mkt_pct:.1f}th percentile of the catalog.")
+                mkt_diff = (mkt_series - mkt_pred).abs()
+                nn_idx = mkt_diff.nsmallest(3).index
+                for i in nn_idx:
+                    row_nn = model_data.loc[i]
+                    nn_lines.append(f"Similar marketability: {row_nn.get('Artist','?')} - {row_nn.get('Track','?')} ({row_nn.get('Predicted_Marketability',0):.2f})")
+
+        # Per-sample contributions (popularity)
+        try:
+            dm = xgb.DMatrix(df_scaled, feature_names=xgb_feature_cols)
+            contrib = xgb_pop_model.get_booster().predict(dm, pred_contribs=True)[0][:-1]
+            top_idx = np.argsort(np.abs(contrib))[-3:][::-1]
+            feat_names = [xgb_feature_cols[i] for i in top_idx]
+            feat_vals = contrib[top_idx]
+            colors = ["#0b2f59" if v >= 0 else "#c0392b" for v in feat_vals]
+            contrib_fig = dcc.Graph(
+                figure=go.Figure(
+                    data=go.Bar(x=feat_vals, y=feat_names, orientation="h", marker_color=colors),
+                    layout=go.Layout(title="Top feature contributions (popularity)", margin=dict(l=80, r=20, t=40, b=40), height=260),
+                ),
+                style={"height": "260px"},
+            )
+            details.append(contrib_fig)
+        except Exception:
+            pass
+
+        if pct_parts:
+            details.append(html.P(" ".join(pct_parts), style={"color": "#0b2f59"}))
+        if nn_lines:
+            details.append(html.Ul([html.Li(t) for t in nn_lines]))
+
+        # Per-sample contributions (if available)
+        contrib_fig = None
+        try:
+            dm = xgb.DMatrix(df_scaled, feature_names=xgb_feature_cols)
+            contrib = xgb_pop_model.get_booster().predict(dm, pred_contribs=True)[0]
+            contrib = contrib[:-1]  # drop bias term
+            top_idx = np.argsort(np.abs(contrib))[-3:][::-1]
+            feat_names = [xgb_feature_cols[i] for i in top_idx]
+            feat_vals = contrib[top_idx]
+            colors = ["#0b2f59" if v >= 0 else "#c0392b" for v in feat_vals]
+            contrib_fig = dcc.Graph(
+                figure=go.Figure(
+                    data=go.Bar(
+                        x=feat_vals,
+                        y=feat_names,
+                        orientation="h",
+                        marker_color=colors,
+                    ),
+                    layout=go.Layout(
+                        title="Top feature contributions (popularity)",
+                        margin=dict(l=80, r=20, t=40, b=40),
+                        height=260,
+                    ),
+                ),
+                style={"height": "260px"},
+            )
+        except Exception:
+            contrib_fig = None
+
+        if contrib_fig:
+            details.append(contrib_fig)
 
         if not status_text:
             status_text = "Analysis complete."
@@ -1021,6 +1144,84 @@ def update_model_table(selected_artist, selected_album, search_text):
     ]
     existing = [c for c in cols_to_keep if c in df.columns]
     return df[existing].to_dict("records")
+
+
+# =========================================================
+# CALLBACK: COMPARISON
+# =========================================================
+
+@app.callback(
+    [
+        Output("xgb-compare-output", "children"),
+        Output("xgb-compare-status-a", "children"),
+        Output("xgb-compare-status-b", "children"),
+    ],
+    [
+        Input("xgb-compare-button", "n_clicks"),
+        Input("xgb-compare-audio-a", "contents"),
+        Input("xgb-compare-audio-b", "contents"),
+    ],
+    [
+        State("compare-title-a", "value"),
+        State("compare-artist-a", "value"),
+        State("compare-title-b", "value"),
+        State("compare-artist-b", "value"),
+        State("xgb-compare-audio-a", "filename"),
+        State("xgb-compare-audio-b", "filename"),
+    ],
+    prevent_initial_call=True,
+)
+def run_xgb_compare(n_clicks, contents_a, contents_b, title_a, artist_a, title_b, artist_b, fname_a, fname_b):
+    try:
+        triggered = callback_context.triggered[0]["prop_id"].split(".")[0] if callback_context.triggered else ""
+        status_a = ""
+        status_b = ""
+        if triggered == "xgb-compare-audio-a":
+            if contents_a and fname_a:
+                status_a = f"Uploaded A: {fname_a}"
+            elif contents_a:
+                status_a = "File A uploaded."
+        if triggered == "xgb-compare-audio-b":
+            if contents_b and fname_b:
+                status_b = f"Uploaded B: {fname_b}"
+            elif contents_b:
+                status_b = "File B uploaded."
+        if triggered != "xgb-compare-button":
+            return no_update, status_a, status_b
+
+        details_a, status_a_run, preds_a = single_xgb_prediction(title_a.strip() if title_a else "", artist_a.strip() if artist_a else "", contents_a, fname_a)
+        details_b, status_b_run, preds_b = single_xgb_prediction(title_b.strip() if title_b else "", artist_b.strip() if artist_b else "", contents_b, fname_b)
+        if status_a_run:
+            status_a = status_a_run
+        if status_b_run:
+            status_b = status_b_run
+
+        comparison = []
+        if preds_a and preds_b:
+            if preds_a["pop"] > preds_b["pop"]:
+                comparison.append(html.H4("Song A predicted higher popularity", style={"color": "#0b2f59"}))
+            elif preds_b["pop"] > preds_a["pop"]:
+                comparison.append(html.H4("Song B predicted higher popularity", style={"color": "#0b2f59"}))
+            else:
+                comparison.append(html.H4("Popularity scores are equal", style={"color": "#0b2f59"}))
+            comparison.append(html.P(f"Song A - Popularity: {preds_a['pop']:.2f} | Marketability: {preds_a['mkt']:.2f}"))
+            comparison.append(html.P(f"Song B - Popularity: {preds_b['pop']:.2f} | Marketability: {preds_b['mkt']:.2f}"))
+
+        output = html.Div(
+            [
+                html.H3("Comparison Result", style={"color": "#0b2f59"}),
+                *(comparison if comparison else [html.P("Could not compare (missing predictions).")]),
+                html.Br(),
+                html.H4("Song A Details", style={"color": "#0b2f59"}),
+                html.Div(details_a),
+                html.Br(),
+                html.H4("Song B Details", style={"color": "#0b2f59"}),
+                html.Div(details_b),
+            ]
+        )
+        return output, status_a, status_b
+    except Exception as e:
+        return f"Comparison error: {e}", "Error", "Error"
 
 
 # =========================================================
