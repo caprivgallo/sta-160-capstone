@@ -8,7 +8,6 @@ import numpy as np
 import librosa
 import requests
 from dash import Dash, dcc, html, Input, Output, State, dash_table, callback_context, no_update
-import xgboost as xgb
 from pipeline import get_youtube_stats
 # =========================================================
 # LOAD & CLEAN DATA  (SUMMARY TAB)
@@ -48,6 +47,7 @@ rec_meta = None
 if rec_feature_cols:
     rec_matrix = np.log1p(clean_data[rec_feature_cols].fillna(0).to_numpy())
     rec_meta = clean_data[rec_meta_cols] if rec_meta_cols else None
+
 
 # =========================================================
 # LOAD MODEL DATA (PREDICTIONS FOR DEEP LEARNING TAB)
@@ -184,6 +184,59 @@ def build_xgb_feature_row(base_row, audio_feats, yt_stats):
     return row
 
 
+def single_xgb_prediction(title, artist, contents, filename):
+    """
+    Shared helper for single-song XGB prediction (used in comparison).
+    """
+    if xgb_pop_model is None or xgb_market_model is None or xgb_scaler is None:
+        return html.P("XGB artifacts not loaded."), "Artifacts missing.", {"pop": np.nan, "mkt": np.nan}
+
+    title_val = title.strip() if title else ""
+    artist_val = artist.strip() if artist else ""
+    yt_stats = {"error": "Skipped (no title/artist)", "data": {}} if not title_val else get_youtube_stats(title_val, artist_val or None)
+    base_row = match_catalog_row(title_val, artist_val)
+
+    audio_feats = {}
+    audio_err = None
+    status_text = "Analyzing..."
+    if contents:
+        try:
+            _, content_string = contents.split(",")
+            decoded = base64.b64decode(content_string)
+            audio_feats = compute_basic_audio_features(decoded)
+            status_text = f"Uploaded {filename or 'file'}; analysis complete."
+        except Exception as e:
+            audio_err = f"Audio feature extraction failed: {e}"
+            status_text = "Audio upload processed but feature extraction failed."
+    else:
+        audio_err = "No audio provided; using defaults for audio features."
+        status_text = "No audio uploaded; using metadata only."
+
+    row = build_xgb_feature_row(base_row, audio_feats, yt_stats)
+    df_row = pd.DataFrame([[row.get(col, 0.0) for col in xgb_feature_cols]], columns=xgb_feature_cols)
+    df_scaled = xgb_scaler.transform(df_row)
+    pop_pred = float(xgb_pop_model.predict(df_scaled)[0])
+    mkt_pred = float(xgb_market_model.predict(df_scaled)[0])
+
+    details = [
+        html.P(f"Predicted Popularity: {pop_pred:.2f}"),
+        html.P(f"Predicted Marketability: {mkt_pred:.2f}"),
+    ]
+
+    if yt_stats and not yt_stats.get("error"):
+        d = yt_stats["data"]
+        details.append(
+            html.P(
+                f"YouTube stats - Views: {d.get('views')}, Likes: {d.get('likes')}, Comments: {d.get('comments')}"
+            )
+        )
+    elif yt_stats and yt_stats.get("error"):
+        details.append(html.P(f"YouTube stats error: {yt_stats['error']}"))
+
+    if audio_err:
+        details.append(html.P(audio_err, style={"color": "red"}))
+
+    return html.Div(details), status_text, {"pop": pop_pred, "mkt": mkt_pred}
 
 
 def match_catalog_row(title, artist):
@@ -343,6 +396,7 @@ app.layout = html.Div(
                 dcc.Tab(label="Model", value="model"),
                 dcc.Tab(label="Visuals", value="visuals"),
                 dcc.Tab(label="Final Report Summary", value="report"),
+                dcc.Tab(label="Final Presentation Video", value="presentation"),
                 dcc.Tab(label="Team & Acknowledgments", value="team"),
 
 
@@ -496,7 +550,17 @@ def render_tab(selected):
     elif selected == "model":
         return html.Div(
             [
-                html.H2("Model", style={"color": "#0b2f59"}),
+                html.Div(
+                    [
+                        html.H2("Model", style={"color": "#0b2f59", "display": "inline-block", "marginRight": "12px"}),
+                        html.A(
+                            "Download mp3 from YouTube",
+                            href="https://youconvert.org/",
+                            target="_blank",
+                            style={"fontSize": "13px", "color": "#0b2f59", "textDecoration": "underline"},
+                        ),
+                    ]
+                ),
                 html.P(
                     "View precomputed popularity and marketability scores from our XGBoost models or run them on your own CSV.",
                     style={"fontSize": "17px"},
@@ -639,7 +703,10 @@ def render_tab(selected):
                         "cursor": "pointer",
                     },
                 ),
-                html.Div(id="xgb-e2e-output", style={"marginTop": "10px"}),
+                dcc.Loading(
+                    type="circle",
+                    children=html.Div(id="xgb-e2e-output", style={"marginTop": "10px"})
+                ),
             ]
         )
 
@@ -811,6 +878,35 @@ def render_tab(selected):
     # ------------------------------------------------------
     # TEAM & ACKNOWLEDGMENTS TAB
     # ------------------------------------------------------
+    elif selected == "presentation":
+        return html.Div(
+            [
+                html.H2("Final Presentation Video", style={"color": "#0b2f59"}),
+                html.P(
+                    "Watch the STA 160 capstone presentation (Fall 2025). The video streams from an external host for all visitors.",
+                    style={"maxWidth": "900px"},
+                ),
+                html.Iframe(
+                    src="https://drive.google.com/file/d/1bEmTBJQnok_IrbN_D8K-1aS9KV-Xirbp/preview",
+                    style={
+                        "width": "100%",
+                        "maxWidth": "900px",
+                        "height": "520px",
+                        "border": "none",
+                        "borderRadius": "8px",
+                        "boxShadow": "0 2px 6px rgba(0,0,0,0.15)",
+                        "marginTop": "15px",
+                    },
+                    allow="autoplay; encrypted-media",
+                ),
+                html.P(
+                    "Highlights: project goals, data pipeline, modeling approach, and key findings on audio features versus engagement.",
+                    style={"marginTop": "12px", "fontSize": "15px"},
+                ),
+            ],
+            style={"maxWidth": "950px", "margin": "auto"},
+        )
+
     elif selected == "team":
         return html.Div(
             [
@@ -952,7 +1048,8 @@ def get_lyrics_url(n_clicks, title, artist):
 
 @app.callback(
     [Output("xgb-e2e-output", "children"), Output("xgb-audio-status", "children")],
-    [Input("xgb-e2e-button", "n_clicks"), Input("xgb-audio", "contents")],
+    Input("xgb-e2e-button", "n_clicks"),
+    State("xgb-audio", "contents"),
     State("xgb-song-title", "value"),
     State("xgb-song-artist", "value"),
     State("xgb-audio", "filename"),
@@ -960,18 +1057,12 @@ def get_lyrics_url(n_clicks, title, artist):
 )
 def run_xgb_e2e(n_clicks, contents, title, artist, filename):
     try:
-        triggered = callback_context.triggered[0]["prop_id"].split(".")[0] if callback_context.triggered else ""
-        # Handle pure upload event: show a success message without running model
-        if triggered == "xgb-audio":
-            if contents and filename:
-                return no_update, f"Uploaded file: {filename}"
-            if contents:
-                return no_update, "File uploaded."
-            return no_update, ""
-
-        # Handle run button click
         if xgb_pop_model is None or xgb_market_model is None or xgb_scaler is None:
-            return "XGB artifacts not loaded. Ensure xgb_popularity.pkl, xgb_marketability.pkl, xgb_scaler.pkl are in the repo root.", "Artifacts missing."
+            return (
+                "XGB artifacts not loaded. Ensure xgb_popularity.pkl, xgb_marketability.pkl, xgb_scaler.pkl are in the repo root.",
+                "Artifacts missing.",
+            )
+
         title_val = title.strip() if title else ""
         artist_val = artist.strip() if artist else ""
         if not xgb_feature_cols:
@@ -986,15 +1077,15 @@ def run_xgb_e2e(n_clicks, contents, title, artist, filename):
         audio_feats = {}
         audio_err = None
         status_text = "Analyzing..."
+
         if contents:
             try:
                 _, content_string = contents.split(",")
                 decoded = base64.b64decode(content_string)
                 audio_feats = compute_basic_audio_features(decoded)
-                status_text = f"Analyzed audio from {filename or 'upload'}."
+                status_text = f"Uploaded {filename or 'file'}; analysis complete."
             except Exception as e:
                 audio_err = f"Audio feature extraction failed: {e}"
-                audio_feats = {}
                 status_text = "Audio upload processed but feature extraction failed."
         else:
             audio_err = "No audio provided; using defaults for audio features."
@@ -1010,19 +1101,25 @@ def run_xgb_e2e(n_clicks, contents, title, artist, filename):
             html.P(f"Predicted Popularity: {pop_pred:.2f}"),
             html.P(f"Predicted Marketability: {mkt_pred:.2f}"),
         ]
+
         if yt_stats and not yt_stats.get("error"):
             d = yt_stats["data"]
-            details.append(html.P(f"YouTube stats - Views: {d.get('views')}, Likes: {d.get('likes')}, Comments: {d.get('comments')}"))
+            details.append(
+                html.P(
+                    f"YouTube stats - Views: {d.get('views')}, Likes: {d.get('likes')}, Comments: {d.get('comments')}"
+                )
+            )
         elif yt_stats and yt_stats.get("error"):
             details.append(html.P(f"YouTube stats error: {yt_stats['error']}"))
+
         if audio_err:
             details.append(html.P(audio_err, style={"color": "red"}))
+
         if isinstance(lyrics_link, str) and lyrics_link.startswith("http"):
             details.append(html.A("View lyrics on Genius", href=lyrics_link, target="_blank"))
         elif lyrics_link:
             details.append(html.P(f"Lyrics: {lyrics_link}"))
 
-        # Percentiles and nearest neighbors for context
         pct_parts = []
         nn_lines = []
         if "Predicted_Popularity" in model_data.columns and "Predicted_Marketability" in model_data.columns:
@@ -1035,7 +1132,9 @@ def run_xgb_e2e(n_clicks, contents, title, artist, filename):
                 nn_idx = pop_diff.nsmallest(3).index
                 for i in nn_idx:
                     row_nn = model_data.loc[i]
-                    nn_lines.append(f"Similar popularity: {row_nn.get('Artist','?')} - {row_nn.get('Track','?')} ({row_nn.get('Predicted_Popularity',0):.2f})")
+                    nn_lines.append(
+                        f"Similar popularity: {row_nn.get('Artist','?')} - {row_nn.get('Track','?')} ({row_nn.get('Predicted_Popularity',0):.2f})"
+                    )
             if len(mkt_series) > 0:
                 mkt_pct = float((mkt_series < mkt_pred).mean() * 100)
                 pct_parts.append(f"Marketability is around the {mkt_pct:.1f}th percentile of the catalog.")
@@ -1043,63 +1142,14 @@ def run_xgb_e2e(n_clicks, contents, title, artist, filename):
                 nn_idx = mkt_diff.nsmallest(3).index
                 for i in nn_idx:
                     row_nn = model_data.loc[i]
-                    nn_lines.append(f"Similar marketability: {row_nn.get('Artist','?')} - {row_nn.get('Track','?')} ({row_nn.get('Predicted_Marketability',0):.2f})")
-
-        # Per-sample contributions (popularity)
-        try:
-            dm = xgb.DMatrix(df_scaled, feature_names=xgb_feature_cols)
-            contrib = xgb_pop_model.get_booster().predict(dm, pred_contribs=True)[0][:-1]
-            top_idx = np.argsort(np.abs(contrib))[-3:][::-1]
-            feat_names = [xgb_feature_cols[i] for i in top_idx]
-            feat_vals = contrib[top_idx]
-            colors = ["#0b2f59" if v >= 0 else "#c0392b" for v in feat_vals]
-            contrib_fig = dcc.Graph(
-                figure=go.Figure(
-                    data=go.Bar(x=feat_vals, y=feat_names, orientation="h", marker_color=colors),
-                    layout=go.Layout(title="Top feature contributions (popularity)", margin=dict(l=80, r=20, t=40, b=40), height=260),
-                ),
-                style={"height": "260px"},
-            )
-            details.append(contrib_fig)
-        except Exception:
-            pass
+                    nn_lines.append(
+                        f"Similar marketability: {row_nn.get('Artist','?')} - {row_nn.get('Track','?')} ({row_nn.get('Predicted_Marketability',0):.2f})"
+                    )
 
         if pct_parts:
             details.append(html.P(" ".join(pct_parts), style={"color": "#0b2f59"}))
         if nn_lines:
             details.append(html.Ul([html.Li(t) for t in nn_lines]))
-
-        # Per-sample contributions (if available)
-        contrib_fig = None
-        try:
-            dm = xgb.DMatrix(df_scaled, feature_names=xgb_feature_cols)
-            contrib = xgb_pop_model.get_booster().predict(dm, pred_contribs=True)[0]
-            contrib = contrib[:-1]  # drop bias term
-            top_idx = np.argsort(np.abs(contrib))[-3:][::-1]
-            feat_names = [xgb_feature_cols[i] for i in top_idx]
-            feat_vals = contrib[top_idx]
-            colors = ["#0b2f59" if v >= 0 else "#c0392b" for v in feat_vals]
-            contrib_fig = dcc.Graph(
-                figure=go.Figure(
-                    data=go.Bar(
-                        x=feat_vals,
-                        y=feat_names,
-                        orientation="h",
-                        marker_color=colors,
-                    ),
-                    layout=go.Layout(
-                        title="Top feature contributions (popularity)",
-                        margin=dict(l=80, r=20, t=40, b=40),
-                        height=260,
-                    ),
-                ),
-                style={"height": "260px"},
-            )
-        except Exception:
-            contrib_fig = None
-
-        if contrib_fig:
-            details.append(contrib_fig)
 
         if not status_text:
             status_text = "Analysis complete."
