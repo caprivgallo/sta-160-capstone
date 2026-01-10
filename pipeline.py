@@ -91,7 +91,7 @@ def get_spotify_data(song_name: str, artist: Optional[str] = None) -> Dict[str, 
 
 def get_youtube_stats(song_name: str, artist: Optional[str] = None) -> Dict[str, Any]:
     """
-    Search YouTube for the top video and return views/likes/comments.
+    Search YouTube for the top videos and return stats for the highest-viewed match.
 
     Requires a YouTube Data API key in env: YT_API_KEY=...
     """
@@ -101,14 +101,15 @@ def get_youtube_stats(song_name: str, artist: Optional[str] = None) -> Dict[str,
 
     query = f"{song_name} {artist}" if artist else song_name
     try:
-        # 1) Search for the top video
+        # 1) Search for top candidates, ordered by view count
         search_resp = requests.get(
             "https://www.googleapis.com/youtube/v3/search",
             params={
                 "part": "snippet",
                 "q": query,
-                "maxResults": 1,
+                "maxResults": 5,
                 "type": "video",
+                "order": "viewCount",
                 "key": api_key,
             },
             timeout=3,
@@ -117,27 +118,41 @@ def get_youtube_stats(song_name: str, artist: Optional[str] = None) -> Dict[str,
         items = search_resp.json().get("items", [])
         if not items:
             return {"error": "No video found", "data": {}}
-        video_id = items[0]["id"]["videoId"]
+
+        video_ids = [it["id"]["videoId"] for it in items if it.get("id", {}).get("videoId")]
+        if not video_ids:
+            return {"error": "No video IDs found", "data": {}}
 
         # 2) Fetch stats for that video
         stats_resp = requests.get(
             "https://www.googleapis.com/youtube/v3/videos",
-            params={"part": "statistics", "id": video_id, "key": api_key},
+            params={"part": "statistics", "id": ",".join(video_ids), "key": api_key},
             timeout=3,
         )
         stats_resp.raise_for_status()
         stats_items = stats_resp.json().get("items", [])
         if not stats_items:
-            return {"error": "No stats found", "data": {"video_id": video_id}}
+            return {"error": "No stats found", "data": {"video_ids": video_ids}}
 
-        stats = stats_items[0].get("statistics", {})
-        data = {
-            "video_id": video_id,
-            "views": int(stats.get("viewCount", 0)),
-            "likes": int(stats.get("likeCount", 0)),
-            "comments": int(stats.get("commentCount", 0)),
-        }
-        return {"error": None, "data": data}
+        # Pick the highest-view video
+        best = None
+        best_views = -1
+        for item in stats_items:
+            stats = item.get("statistics", {})
+            views = int(stats.get("viewCount", 0))
+            if views > best_views:
+                best_views = views
+                best = {
+                    "video_id": item.get("id"),
+                    "views": views,
+                    "likes": int(stats.get("likeCount", 0)),
+                    "comments": int(stats.get("commentCount", 0)),
+                }
+
+        if not best:
+            return {"error": "No valid stats found", "data": {"video_ids": video_ids}}
+
+        return {"error": None, "data": best}
     except Exception as e:
         return {"error": str(e), "data": {}}
 

@@ -2,16 +2,12 @@ import base64
 import io
 import os
 from pathlib import Path
-import tempfile
-import math
 import joblib
 import pandas as pd
 import numpy as np
-import torch
-import torch.nn as nn
 import librosa
 import requests
-from dash import Dash, dcc, html, Input, Output, State, dash_table, callback_context
+from dash import Dash, dcc, html, Input, Output, State, dash_table, callback_context, no_update
 from pipeline import get_youtube_stats
 # =========================================================
 # LOAD & CLEAN DATA  (SUMMARY TAB)
@@ -51,6 +47,7 @@ rec_meta = None
 if rec_feature_cols:
     rec_matrix = np.log1p(clean_data[rec_feature_cols].fillna(0).to_numpy())
     rec_meta = clean_data[rec_meta_cols] if rec_meta_cols else None
+
 
 # =========================================================
 # LOAD MODEL DATA (PREDICTIONS FOR DEEP LEARNING TAB)
@@ -92,12 +89,6 @@ app.title = "The Science of Song Success"
 # MODEL LOADING (PyTorch)
 # =========================================================
 
-MODEL_PATH = "best_model_robust.pt"
-DEVICE = "cpu"
-checkpoint = None
-target_frames = 768
-target_names = []
-target_stats = {}
 XGB_MODEL_POP_PATH = "xgb_popularity.pkl"
 XGB_MODEL_MARKET_PATH = "xgb_marketability.pkl"
 XGB_SCALER_PATH = "xgb_scaler.pkl"
@@ -105,41 +96,7 @@ xgb_pop_model = None
 xgb_market_model = None
 xgb_scaler = None
 GENIUS_TOKEN = os.environ.get("GENIUS_API_TOKEN")
-SR = 16000
-N_FFT = 512
-HOP = 160
-WIN = 400
-N_MELS = 128
-FMIN = 20
-FMAX = 8000
-POWER = 2.0
-EPS = 1e-10
-
-try:
-    # Try TorchScript first
-    model = torch.jit.load(MODEL_PATH, map_location=DEVICE)
-    model.eval()
-except Exception:
-    try:
-        checkpoint = torch.load(MODEL_PATH, map_location=DEVICE)
-        if isinstance(checkpoint, dict):
-            target_names = checkpoint.get("targets") or []
-            target_stats = checkpoint.get("target_stats") or {}
-            cfg_frames = checkpoint.get("config", {}).get("frames")
-            if cfg_frames:
-                target_frames = int(cfg_frames)
-        if hasattr(checkpoint, "eval") and not isinstance(checkpoint, dict):
-            model = checkpoint
-            model.eval()
-        else:
-            model = None
-    except Exception as e:  # pragma: no cover - startup guard
-        model = None
-        model_load_error = str(e)
-    else:
-        model_load_error = None
-else:
-    model_load_error = None
+SR = 16000  # sample rate for lightweight audio feature extraction
 
 # =========================================================
 # MODEL LOADING (XGB artifacts)
@@ -164,255 +121,6 @@ except Exception:
     xgb_pop_model = None
     xgb_market_model = None
     xgb_scaler = None
-
-
-# Model architecture (from training)
-class ConvBlock(nn.Module):
-    def __init__(self, cin, cout, k=(3, 7), s=(1, 1), p=None):
-        super().__init__()
-        p = p or (k[0] // 2, k[1] // 2)
-        self.conv = nn.Conv2d(cin, cout, k, s, p)
-        self.bn = nn.BatchNorm2d(cout)
-        self.act = nn.SiLU()
-
-    def forward(self, x):
-        return self.act(self.bn(self.conv(x)))
-
-
-class ResidualBlock(nn.Module):
-    def __init__(self, channels, k=(3, 3)):
-        super().__init__()
-        p = (k[0] // 2, k[1] // 2)
-        self.conv1 = nn.Conv2d(channels, channels, k, padding=p)
-        self.bn1 = nn.BatchNorm2d(channels)
-        self.act1 = nn.SiLU()
-        self.conv2 = nn.Conv2d(channels, channels, k, padding=p)
-        self.bn2 = nn.BatchNorm2d(channels)
-        self.act2 = nn.SiLU()
-
-    def forward(self, x):
-        identity = x
-        out = self.act1(self.bn1(self.conv1(x)))
-        out = self.bn2(self.conv2(out))
-        out = out + identity
-        return self.act2(out)
-
-
-class MultiTaskModel_v2_with_residuals(nn.Module):
-    def __init__(self, n_targets):
-        super().__init__()
-        C = [32, 64, 128, 256, 512]
-        self.stem = ConvBlock(1, C[0], (3, 7))
-        self.res_stem = ResidualBlock(C[0], (3, 3))
-        self.b1 = ConvBlock(C[0], C[1], (3, 5))
-        self.res1 = ResidualBlock(C[1], (3, 3))
-        self.b2 = ConvBlock(C[1], C[2], (3, 5))
-        self.res2 = ResidualBlock(C[2], (3, 3))
-        self.b3 = ConvBlock(C[2], C[3], (3, 3))
-        self.res3 = ResidualBlock(C[3], (3, 3))
-        self.b4 = ConvBlock(C[3], C[4], (3, 3))
-        self.res4 = ResidualBlock(C[4], (3, 3))
-        self.pool = nn.AdaptiveAvgPool2d((1, 1))
-        self.head = nn.Sequential(
-            nn.Flatten(),
-            nn.Linear(C[4], 256),
-            nn.SiLU(),
-            nn.Dropout(0.3),
-            nn.Linear(256, n_targets),
-        )
-
-    def forward(self, x):
-        x = self.stem(x)
-        x = self.res_stem(x)
-        x = self.b1(x)
-        x = self.res1(x)
-        x = self.b2(x)
-        x = self.res2(x)
-        x = nn.functional.max_pool2d(x, 2)
-        x = self.b3(x)
-        x = self.res3(x)
-        x = nn.functional.max_pool2d(x, 2)
-        x = self.b4(x)
-        x = self.res4(x)
-        x = self.pool(x)
-        return self.head(x)
-
-
-# If checkpoint has a state dict, build the model now
-if model is None and isinstance(checkpoint, dict) and "model_state_dict" in checkpoint:
-    if target_names:
-        try:
-            model = MultiTaskModel_v2_with_residuals(n_targets=len(target_names))
-            model.load_state_dict(checkpoint["model_state_dict"])
-            model.eval()
-            model_load_error = None
-        except Exception as e:  # pragma: no cover
-            model_load_error = f"Failed to load state_dict into model: {e}"
-    else:
-        model_load_error = "Checkpoint has state_dict but no targets list to size the model."
-
-
-def preprocess_features(df):
-    """
-    Basic preprocessing placeholder.
-    Replace/extend with the exact steps used during training.
-    """
-    cols = ["tempo", "energy", "loudness", "duration_ms"]
-    missing = [c for c in cols if c not in df.columns]
-    if missing:
-        raise ValueError(f"Missing columns: {', '.join(missing)}")
-    return torch.tensor(df[cols].values, dtype=torch.float32, device=DEVICE)
-
-
-def prepare_logmel_tensor(raw_bytes, target_frames=768, n_mels=128):
-    """
-    Load an NPZ log-mel file from bytes and return a tensor of shape [1, 1, n_mels, target_frames].
-    Crops/pads to target_frames and applies winsorization + per-file standardization
-    similar to the training pipeline.
-    """
-    np_obj = np.load(io.BytesIO(raw_bytes))
-    if isinstance(np_obj, np.lib.npyio.NpzFile):
-        if "logmel" in np_obj.files:
-            arr = np_obj["logmel"]
-        elif np_obj.files:
-            arr = np_obj[np_obj.files[0]]
-        else:
-            raise ValueError("NPZ file is empty.")
-    else:
-        arr = np_obj
-    if arr.ndim != 2:
-        raise ValueError(f"Expected logmel 2D array, got shape {arr.shape}")
-    if arr.shape[0] != n_mels:
-        raise ValueError(f"Expected {n_mels} mel bins, got {arr.shape[0]}")
-
-    # time axis is arr.shape[1]; crop/pad to target_frames
-    T = arr.shape[1]
-    if T >= target_frames:
-        start = (T - target_frames) // 2
-        arr = arr[:, start:start + target_frames]
-    else:
-        pad_before = (target_frames - T) // 2
-        pad_after = target_frames - T - pad_before
-        arr = np.pad(arr, ((0, 0), (pad_before, pad_after)), mode="constant")
-
-    # winsorize and standardize per sample
-    lo, hi = np.percentile(arr, [0.5, 99.5]).astype(np.float32)
-    arr = np.clip(arr, lo, hi)
-    m = float(np.mean(arr, dtype=np.float64))
-    s = float(np.std(arr, dtype=np.float64))
-    if not np.isfinite(s) or s < 1e-6:
-        raise ValueError("Invalid std in logmel array.")
-    arr = (arr - m) / s
-    arr = np.clip(arr, -10, 10)
-
-    tensor = torch.tensor(arr, dtype=torch.float32, device=DEVICE).unsqueeze(0).unsqueeze(0)
-    return tensor
-
-
-def logmel_from_audio_bytes(file_bytes, target_frames=768):
-    """
-    Decode audio bytes (mp3/mp4/wav) -> log-mel -> standardized tensor [1,1,n_mels,target_frames].
-    Mirrors the training pipeline params.
-    """
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".tmp") as tmp:
-        tmp.write(file_bytes)
-        tmp_path = tmp.name
-    try:
-        y, sr = librosa.load(tmp_path, sr=SR, mono=True)
-    finally:
-        try:
-            os.remove(tmp_path)
-        except OSError:
-            pass
-
-    if y is None or y.size == 0:
-        raise ValueError("Failed to decode audio.")
-
-    S = librosa.feature.melspectrogram(
-        y=y,
-        sr=SR,
-        n_fft=N_FFT,
-        hop_length=HOP,
-        win_length=WIN,
-        n_mels=N_MELS,
-        fmin=FMIN,
-        fmax=FMAX,
-        power=POWER,
-    )
-    logS = np.log10(np.maximum(S, EPS)).astype(np.float32)
-
-    # crop/pad to target_frames
-    T = logS.shape[1]
-    if T >= target_frames:
-        start = (T - target_frames) // 2
-        logS = logS[:, start:start + target_frames]
-    else:
-        pad_before = (target_frames - T) // 2
-        pad_after = target_frames - T - pad_before
-        logS = np.pad(logS, ((0, 0), (pad_before, pad_after)), mode="constant")
-
-    # winsorize + standardize
-    lo, hi = np.percentile(logS, [0.5, 99.5]).astype(np.float32)
-    logS = np.clip(logS, lo, hi)
-    m = float(np.mean(logS, dtype=np.float64))
-    s = float(np.std(logS, dtype=np.float64))
-    if not np.isfinite(s) or s < 1e-6:
-        raise ValueError("Invalid std in logmel array.")
-    logS = (logS - m) / s
-    logS = np.clip(logS, -10, 10)
-
-    return torch.tensor(logS, dtype=torch.float32, device=DEVICE).unsqueeze(0).unsqueeze(0)
-
-
-def denormalize_predictions(pred_array):
-    """Apply target mean/std from checkpoint if shapes align."""
-    if not target_names or not target_stats:
-        return pred_array
-    if pred_array.shape[-1] != len(target_names):
-        return pred_array
-    pred = np.array(pred_array, dtype=float)
-    for i, name in enumerate(target_names):
-        stats = target_stats.get(name)
-        if stats and "mean" in stats and "std" in stats:
-            pred[..., i] = pred[..., i] * stats["std"] + stats["mean"]
-    return pred
-
-
-def expm1_for_logs(pred_array):
-    """
-    Convert *_log targets back to real scale using expm1.
-    Returns a dict mapping target name -> array of converted values when applicable.
-    """
-    if not target_names:
-        return {}
-    pred_array = np.array(pred_array, dtype=float)
-    outputs = {}
-    for i, name in enumerate(target_names):
-        if name.endswith("_log"):
-            base = name.replace("_log", "")
-            outputs[base] = np.expm1(pred_array[..., i])
-    return outputs
-
-
-def clamp_logs(pred_flat):
-    """
-    Clamp *_log predictions to mean ± 2.5 std using target_stats.
-    Mutates and returns the array.
-    """
-    if not target_stats:
-        return pred_flat
-    for i, name in enumerate(target_names):
-        if name.endswith("_log") and name in target_stats:
-            mu = target_stats[name].get("mean")
-            sd = target_stats[name].get("std")
-            if mu is not None and sd is not None:
-                pred_flat[i] = np.clip(pred_flat[i], mu - 2.5 * sd, mu + 2.5 * sd)
-    return pred_flat
-
-
-def normal_percentile(z):
-    """Approximate percentile from z-score using error function."""
-    return 50 * (1 + math.erf(z / math.sqrt(2)))
 
 
 # Basic audio feature extraction for XGB fallback
@@ -449,12 +157,12 @@ def compute_basic_audio_features(raw_bytes, max_duration=10.0):
     }
 
 
-def build_xgb_feature_row(audio_feats, yt_stats):
+def build_xgb_feature_row(base_row, audio_feats, yt_stats):
     """
     Build a feature dict aligned to xgb_feature_cols.
-    Fills missing fields with zeros.
+    Start from base_row (e.g., a matched catalog row) then overlay audio/yt stats.
     """
-    row = {k: 0.0 for k in xgb_feature_cols}
+    row = dict(base_row) if base_row else {k: 0.0 for k in xgb_feature_cols}
     if audio_feats:
         for k, v in audio_feats.items():
             if k in row:
@@ -474,6 +182,89 @@ def build_xgb_feature_row(audio_feats, yt_stats):
         if "comment_view_ratio" in row: row["comment_view_ratio"] = comments / (views + 1)
         if "engagement_rate" in row: row["engagement_rate"] = (likes + comments) / (views + 1)
     return row
+
+
+def single_xgb_prediction(title, artist, contents, filename):
+    """
+    Shared helper for single-song XGB prediction (used in comparison).
+    """
+    if xgb_pop_model is None or xgb_market_model is None or xgb_scaler is None:
+        return html.P("XGB artifacts not loaded."), "Artifacts missing.", {"pop": np.nan, "mkt": np.nan}
+
+    title_val = title.strip() if title else ""
+    artist_val = artist.strip() if artist else ""
+    yt_stats = {"error": "Skipped (no title/artist)", "data": {}} if not title_val else get_youtube_stats(title_val, artist_val or None)
+    base_row = match_catalog_row(title_val, artist_val)
+
+    audio_feats = {}
+    audio_err = None
+    status_text = "Analyzing..."
+    if contents:
+        try:
+            _, content_string = contents.split(",")
+            decoded = base64.b64decode(content_string)
+            audio_feats = compute_basic_audio_features(decoded)
+            status_text = f"Uploaded {filename or 'file'}; analysis complete."
+        except Exception as e:
+            audio_err = f"Audio feature extraction failed: {e}"
+            status_text = "Audio upload processed but feature extraction failed."
+    else:
+        audio_err = "No audio provided; using defaults for audio features."
+        status_text = "No audio uploaded; using metadata only."
+
+    row = build_xgb_feature_row(base_row, audio_feats, yt_stats)
+    df_row = pd.DataFrame([[row.get(col, 0.0) for col in xgb_feature_cols]], columns=xgb_feature_cols)
+    df_scaled = xgb_scaler.transform(df_row)
+    pop_pred = float(xgb_pop_model.predict(df_scaled)[0])
+    mkt_pred = float(xgb_market_model.predict(df_scaled)[0])
+
+    details = [
+        html.P(f"Predicted Popularity: {pop_pred:.2f}"),
+        html.P(f"Predicted Marketability: {mkt_pred:.2f}"),
+    ]
+
+    if yt_stats and not yt_stats.get("error"):
+        d = yt_stats["data"]
+        details.append(
+            html.P(
+                f"YouTube stats - Views: {d.get('views')}, Likes: {d.get('likes')}, Comments: {d.get('comments')}"
+            )
+        )
+    elif yt_stats and yt_stats.get("error"):
+        details.append(html.P(f"YouTube stats error: {yt_stats['error']}"))
+
+    if audio_err:
+        details.append(html.P(audio_err, style={"color": "red"}))
+
+    return html.Div(details), status_text, {"pop": pop_pred, "mkt": mkt_pred}
+
+
+def match_catalog_row(title, artist):
+    """
+    Try to find a matching row in model_data using title (and optional artist).
+    Returns a dict of feature values or None.
+    """
+    if not title or model_data is None:
+        return None
+    if "Track" not in model_data.columns:
+        return None
+    df = model_data
+    title_lower = title.strip().lower()
+    mask = df["Track"].astype(str).str.lower() == title_lower
+    if artist and "Artist" in df.columns:
+        artist_lower = artist.strip().lower()
+        mask = mask & (df["Artist"].astype(str).str.lower() == artist_lower)
+    matches = df[mask]
+    if matches.empty:
+        mask = df["Track"].astype(str).str.lower().str.contains(title_lower, na=False)
+        if artist and "Artist" in df.columns:
+            artist_lower = artist.strip().lower()
+            mask = mask & df["Artist"].astype(str).str.lower().str.contains(artist_lower, na=False)
+        matches = df[mask]
+    if matches.empty:
+        return None
+    row = matches.iloc[0]
+    return {col: row[col] for col in xgb_feature_cols if col in row}
 
 
 # Genius lyrics helper
@@ -602,10 +393,11 @@ app.layout = html.Div(
             children=[
                 dcc.Tab(label="Introduction", value="intro"),
                 dcc.Tab(label="Summary Statistics", value="summary"),
-		dcc.Tab(label="Deep Learning Model", value="model"),
-		dcc.Tab(label="Visuals", value="visuals"),	
-		dcc.Tab(label="Final Report Summary", value="report"),
-		dcc.Tab(label="Team & Acknowledgments", value="team"), 
+                dcc.Tab(label="Model", value="model"),
+                dcc.Tab(label="Visuals", value="visuals"),
+                dcc.Tab(label="Final Report Summary", value="report"),
+                dcc.Tab(label="Final Presentation Video", value="presentation"),
+                dcc.Tab(label="Team & Acknowledgments", value="team"),
 
 
 
@@ -753,287 +545,126 @@ def render_tab(selected):
         )
 
     # ------------------------------------------------------
-    # MODEL TAB  (OVERVIEW + DROPDOWNS + TABLE OF PREDICTIONS)
+    # MODEL TAB  (XGB ONLY)
     # ------------------------------------------------------
     elif selected == "model":
         return html.Div(
             [
-                html.H2("Deep Learning Model", style={"color": "#0b2f59"}),
-
-                html.Label("Choose model engine:", style={"fontWeight": "bold"}),
-                dcc.RadioItems(
-                    id="model-engine",
-                    options=[
-                        {"label": "Audio CNN (log-mel, NPZ/audio)", "value": "cnn"},
-                        {"label": "XGBoost (precomputed table)", "value": "xgb"},
+                html.Div(
+                    [
+                        html.H2("Model", style={"color": "#0b2f59", "display": "inline-block", "marginRight": "12px"}),
+                        html.A(
+                            "Download mp3 from YouTube",
+                            href="https://youconvert.org/",
+                            target="_blank",
+                            style={"fontSize": "13px", "color": "#0b2f59", "textDecoration": "underline"},
+                        ),
+                    ]
+                ),
+                html.P(
+                    "View precomputed popularity and marketability scores from our XGBoost models or run them on your own CSV.",
+                    style={"fontSize": "17px"},
+                ),
+                html.P(
+                    "Tip: include the song title (and artist) so we can fetch YouTube stats and lyrics for better context.",
+                    style={"fontSize": "13px", "color": "#444"},
+                ),
+                html.Div(
+                    style={"display": "grid", "gridTemplateColumns": "repeat(auto-fit, minmax(200px, 1fr))", "gap": "10px"},
+                    children=[
+                        dcc.Dropdown(
+                            id="model-artist-dropdown",
+                            options=model_artist_options,
+                            placeholder="Filter by artist...",
+                        ),
+                        dcc.Dropdown(
+                            id="model-album-dropdown",
+                            options=model_album_options,
+                            placeholder="Filter by album...",
+                        ),
+                        dcc.Input(
+                            id="model-search-input",
+                            type="text",
+                            placeholder="Search track/artist...",
+                        ),
                     ],
-                    value="cnn",
-                    labelStyle={"display": "block", "marginBottom": "4px"},
                 ),
                 html.Br(),
-
+                dash_table.DataTable(
+                    id="model-table",
+                    columns=[
+                        {"name": "Artist", "id": "Artist"},
+                        {"name": "Track", "id": "Track"},
+                        {"name": "Album", "id": "Album"},
+                        {"name": "Predicted_Popularity", "id": "Predicted_Popularity"},
+                        {"name": "Predicted_Marketability", "id": "Predicted_Marketability"},
+                    ],
+                    data=model_data.head(50).to_dict("records"),
+                    page_size=10,
+                    style_table={"overflowX": "auto"},
+                    style_header={
+                        "backgroundColor": "#0b2f59",
+                        "color": "white",
+                        "fontWeight": "bold",
+                    },
+                ),
+                html.Br(),
+                html.H4("Run XGB on your CSV", style={"color": "#0b2f59"}),
+                html.P(
+                    "Upload a CSV containing the numeric feature columns from merged_no_embeddings.csv to score songs locally. "
+                    "Ensure xgb_popularity.pkl, xgb_marketability.pkl, and xgb_scaler.pkl are present in the repo root.",
+                    style={"fontSize": "14px", "color": "#444"},
+                ),
+                dcc.Upload(
+                    id="xgb-upload",
+                    children=html.Div(
+                        ["Drag and drop CSV for XGB inference, or ", html.A("select a file", style={"color": "#0b2f59"})]
+                    ),
+                    style={
+                        "width": "100%",
+                        "height": "90px",
+                        "lineHeight": "90px",
+                        "borderWidth": "2px",
+                        "borderStyle": "dashed",
+                        "borderColor": "#0b2f59",
+                        "textAlign": "center",
+                        "borderRadius": "10px",
+                        "marginBottom": "12px",
+                        "backgroundColor": "white",
+                    },
+                    multiple=False,
+                ),
+                html.Div(id="xgb-upload-output"),
+                html.Br(),
+                html.H4("Lyrics lookup (Genius)", style={"color": "#0b2f59"}),
                 html.Div(
-                    id="cnn-section",
+                    style={"display": "grid", "gridTemplateColumns": "repeat(auto-fit, minmax(220px, 1fr))", "gap": "10px"},
                     children=[
-                        html.P(
-                            """
-                            Provide feature values to generate predictions, or upload a CSV/NPZ/audio for batch
-                            scoring with the CNN. Features should match the training schema used for this model.
-                            """,
-                            style={"fontSize": "17px"},
-                        ),
-                        html.Div(
-                            style={
-                                "display": "grid",
-                                "gridTemplateColumns": "repeat(auto-fit, minmax(220px, 1fr))",
-                                "gap": "12px",
-                                "marginTop": "10px",
-                            },
-                            children=[
-                                html.Div(
-                                    [
-                                        html.Label("Tempo (BPM)"),
-                                        dcc.Slider(
-                                            id="tempo",
-                                            min=50,
-                                            max=220,
-                                            step=1,
-                                            value=120,
-                                            marks=None,
-                                            tooltip={"placement": "bottom"},
-                                        ),
-                                    ]
-                                ),
-                                html.Div(
-                                    [
-                                        html.Label("Energy (0-1)"),
-                                        dcc.Slider(
-                                            id="energy",
-                                            min=0,
-                                            max=1,
-                                            step=0.01,
-                                            value=0.6,
-                                            marks=None,
-                                            tooltip={"placement": "bottom"},
-                                        ),
-                                    ]
-                                ),
-                                html.Div(
-                                    [
-                                        html.Label("Loudness (dB)"),
-                                        dcc.Slider(
-                                            id="loudness",
-                                            min=-40,
-                                            max=5,
-                                            step=0.5,
-                                            value=-8,
-                                            marks=None,
-                                            tooltip={"placement": "bottom"},
-                                        ),
-                                    ]
-                                ),
-                                html.Div(
-                                    [
-                                        html.Label("Duration (ms)"),
-                                        dcc.Slider(
-                                            id="duration_ms",
-                                            min=60000,
-                                            max=480000,
-                                            step=5000,
-                                            value=180000,
-                                            marks=None,
-                                            tooltip={"placement": "bottom"},
-                                        ),
-                                    ]
-                                ),
-                            ],
-                        ),
-                        html.Button(
-                            "Predict Single",
-                            id="predict-btn",
-                            n_clicks=0,
-                            style={
-                                "marginTop": "12px",
-                                "backgroundColor": "#0b2f59",
-                                "color": "white",
-                                "padding": "10px 18px",
-                                "borderRadius": "8px",
-                                "border": "none",
-                                "cursor": "pointer",
-                            },
-                        ),
-                        html.Div(id="single-output", style={"marginTop": "12px", "fontWeight": "bold"}),
-
-                        html.Hr(),
-                        html.H3("Batch Prediction", style={"color": "#0b2f59"}),
-                        html.P(
-                            "Upload a CSV (tempo, energy, loudness, duration_ms), an NPZ log-mel file, or audio.",
-                            style={"fontSize": "15px"},
-                        ),
-                        dcc.Upload(
-                            id="upload-data",
-                            children=html.Div(
-                                ["Drag and drop CSV/NPZ here, or ", html.A("select a file", style={"color": "#0b2f59"})]
-                            ),
-                            style={
-                                "width": "100%",
-                                "height": "90px",
-                                "lineHeight": "90px",
-                                "borderWidth": "2px",
-                                "borderStyle": "dashed",
-                                "borderColor": "#0b2f59",
-                                "textAlign": "center",
-                                "borderRadius": "10px",
-                                "marginBottom": "12px",
-                                "backgroundColor": "white",
-                            },
-                            multiple=False,
-                        ),
-                        html.Div(id="batch-output"),
-
-                        html.Br(),
-                        html.H3("Upload Audio (mp3/mp4/wav)", style={"color": "#0b2f59"}),
-                        html.P("We will compute log-mel features on the server and run the CNN.", style={"fontSize": "15px"}),
-                        dcc.Upload(
-                            id="upload-audio",
-                            children=html.Div(
-                                ["Drag and drop audio here, or ", html.A("select a file", style={"color": "#0b2f59"})]
-                            ),
-                            style={
-                                "width": "100%",
-                                "height": "90px",
-                                "lineHeight": "90px",
-                                "borderWidth": "2px",
-                                "borderStyle": "dashed",
-                                "borderColor": "#0b2f59",
-                                "textAlign": "center",
-                                "borderRadius": "10px",
-                                "marginBottom": "12px",
-                                "backgroundColor": "white",
-                            },
-                            multiple=False,
-                        ),
-                        html.Div(id="audio-output"),
-
-                        html.Br(),
-                        html.Div(
-                            [
-                                html.H4("Notes", style={"color": "#0b2f59"}),
-                                html.Ul(
-                                    [
-                                        html.Li("CNN model best_model_robust.pt is loaded once at startup (CPU)."),
-                                        html.Li("CSV expects columns: tempo, energy, loudness, duration_ms; NPZ uploads should contain the feature matrix as the first array."),
-                                        html.Li("If predictions fail, a descriptive error will appear below. Checkpoint with only state_dict requires the model class (e.g., MultiTaskModel_v2_with_residuals) to be defined in code."),
-                                    ]
-                                ),
-                            ]
-                        ),
+                        dcc.Input(id="lyrics-title", type="text", placeholder="Song title"),
+                        dcc.Input(id="lyrics-artist", type="text", placeholder="Artist (optional)"),
                     ],
                 ),
-
-                html.Div(
-                    id="xgb-section",
-                    children=[
-                        html.P(
-                            "View the XGBoost marketability/popularity predictions (precomputed) with filters.",
-                            style={"fontSize": "17px"},
-                        ),
-                        html.P(
-                            "Upload a CSV containing the same numeric feature columns as merged_no_embeddings.csv to run XGB locally "
-                            "if xgb_popularity.pkl/xgb_marketability.pkl/xgb_scaler.pkl are present.",
-                            style={"fontSize": "14px", "color": "#444"},
-                        ),
-                        html.Div(
-                            style={"display": "grid", "gridTemplateColumns": "repeat(auto-fit, minmax(200px, 1fr))", "gap": "10px"},
-                            children=[
-                                dcc.Dropdown(
-                                    id="model-artist-dropdown",
-                                    options=model_artist_options,
-                                    placeholder="Filter by artist...",
-                                ),
-                                dcc.Dropdown(
-                                    id="model-album-dropdown",
-                                    options=model_album_options,
-                                    placeholder="Filter by album...",
-                                ),
-                                dcc.Input(
-                                    id="model-search-input",
-                                    type="text",
-                                    placeholder="Search track/artist...",
-                                ),
-                            ],
-                        ),
-                        html.Br(),
-                        dcc.Upload(
-                            id="xgb-upload",
-                            children=html.Div(
-                                ["Drag and drop CSV for XGB inference, or ", html.A("select a file", style={"color": "#0b2f59"})]
-                            ),
-                            style={
-                                "width": "100%",
-                                "height": "90px",
-                                "lineHeight": "90px",
-                                "borderWidth": "2px",
-                                "borderStyle": "dashed",
-                                "borderColor": "#0b2f59",
-                                "textAlign": "center",
-                                "borderRadius": "10px",
-                                "marginBottom": "12px",
-                                "backgroundColor": "white",
-                            },
-                            multiple=False,
-                        ),
-                        html.Div(id="xgb-upload-output"),
-                        html.Br(),
-                        dash_table.DataTable(
-                            id="model-table",
-                            columns=[
-                                {"name": "Artist", "id": "Artist"},
-                                {"name": "Track", "id": "Track"},
-                                {"name": "Album", "id": "Album"},
-                                {"name": "Predicted_Popularity", "id": "Predicted_Popularity"},
-                                {"name": "Predicted_Marketability", "id": "Predicted_Marketability"},
-                            ],
-                            data=model_data.head(50).to_dict("records"),
-                            page_size=10,
-                            style_table={"overflowX": "auto"},
-                            style_header={
-                                "backgroundColor": "#0b2f59",
-                                "color": "white",
-                                "fontWeight": "bold",
-                            },
-                        ),
-                        html.Br(),
-                        html.H4("Lyrics lookup (Genius)", style={"color": "#0b2f59"}),
-                        html.Div(
-                            style={"display": "grid", "gridTemplateColumns": "repeat(auto-fit, minmax(220px, 1fr))", "gap": "10px"},
-                            children=[
-                                dcc.Input(id="lyrics-title", type="text", placeholder="Song title"),
-                                dcc.Input(id="lyrics-artist", type="text", placeholder="Artist (optional)"),
-                            ],
-                        ),
                 html.Button(
                     "Find Lyrics",
                     id="lyrics-button",
                     n_clicks=0,
                     style={
-                                "marginTop": "10px",
-                                "backgroundColor": "#0b2f59",
-                                "color": "white",
-                                "padding": "8px 14px",
-                                "borderRadius": "8px",
-                                "border": "none",
+                        "marginTop": "10px",
+                        "backgroundColor": "#0b2f59",
+                        "color": "white",
+                        "padding": "8px 14px",
+                        "borderRadius": "8px",
+                        "border": "none",
                         "cursor": "pointer",
                     },
                 ),
                 html.Div(id="lyrics-output", style={"marginTop": "8px"}),
-
                 html.Br(),
                 html.H4("End-to-end XGB (Audio + Title)", style={"color": "#0b2f59"}),
                 html.Div(
                     style={"display": "grid", "gridTemplateColumns": "repeat(auto-fit, minmax(220px, 1fr))", "gap": "10px"},
                     children=[
-                        dcc.Input(id="xgb-song-title", type="text", placeholder="Song title"),
+                        dcc.Input(id="xgb-song-title", type="text", placeholder="Song title (recommended)"),
                         dcc.Input(id="xgb-song-artist", type="text", placeholder="Artist (optional)"),
                     ],
                 ),
@@ -1057,6 +688,7 @@ def render_tab(selected):
                     },
                     multiple=False,
                 ),
+                html.Div(id="xgb-audio-status", style={"fontSize": "12px", "color": "#0b2f59", "marginTop": "4px"}),
                 html.Button(
                     "Run XGB End-to-End",
                     id="xgb-e2e-button",
@@ -1071,77 +703,9 @@ def render_tab(selected):
                         "cursor": "pointer",
                     },
                 ),
-                html.Div(id="xgb-e2e-output", style={"marginTop": "10px"}),
-            ],
-        ),
-
-                html.Br(),
-                html.H3("Explore XGBoost Predictions", style={"color": "#0b2f59"}),
-                html.P( 
-                    """
-                     What do these scores mean?
-
-                     • Predicted Popularity is a 0–100 score that approximates Spotify’s track popularity, 
-                     where higher values indicate songs that look more like widely streamed hits.
-
-                     • Predicted Marketability is a 0–100 index we designed that combines streaming popularity, 
-                        YouTube views and likes, engagement rate, and a small contribution from energy and danceability. 
-                        Higher values indicate songs that appear more attractive from a commercial/marketing standpoint.
-
-                     Use the filters bleow or click through the drop menu below to explore our predicted scores across 5000+ songs.
-                    """,
-                    style={"fontSize": "17px", "whiteSpace": "pre-line"},
-                ),
-                html.Br(),
-
-                html.Label("Filter by Artist:", style={"fontWeight": "bold"}),
-                dcc.Dropdown(
-                    id="model-artist-dropdown",
-                    options=model_artist_options,
-                    placeholder="Select an artist...",
-                ),
-                html.Br(),
-
-                html.Label("Filter by Album:", style={"fontWeight": "bold"}),
-                dcc.Dropdown(
-                    id="model-album-dropdown",
-                    options=model_album_options,
-                    placeholder="Select an album...",
-                ) if len(model_album_options) > 0 else html.Div(
-                    "(Album metadata not available in this dataset.)",
-                    style={"fontStyle": "italic", "marginBottom": "10px"},
-                ),
-                html.Br(),
-
-                html.Label("Search Songs or Albums:", style={"fontWeight": "bold"}),
-                dcc.Input(
-                    id="model-search-input",
-                    type="text",
-                    placeholder="Type song, album, or keyword...",
-                    style={"width": "100%", "padding": "10px"},
-                ),
-                html.Br(), html.Br(),
-
-                dash_table.DataTable(
-                    id="model-table",
-                    columns=[
-                        {"name": "Artist", "id": "Artist"},
-                        {"name": "Track", "id": "Track"},
-                        {"name": "Album", "id": "Album"},
-                        {"name": "Predicted Popularity", "id": "Predicted_Popularity"},
-                        {
-                            "name": "Predicted Marketability",
-                            "id": "Predicted_Marketability",
-                        },
-                    ],
-                    data=model_data.to_dict("records"),
-                    page_size=10,
-                    style_table={"overflowX": "auto"},
-                    style_header={
-                        "backgroundColor": "#0b2f59",
-                        "color": "white",
-                        "fontWeight": "bold",
-                    },
+                dcc.Loading(
+                    type="circle",
+                    children=html.Div(id="xgb-e2e-output", style={"marginTop": "10px"})
                 ),
             ]
         )
@@ -1314,6 +878,35 @@ def render_tab(selected):
     # ------------------------------------------------------
     # TEAM & ACKNOWLEDGMENTS TAB
     # ------------------------------------------------------
+    elif selected == "presentation":
+        return html.Div(
+            [
+                html.H2("Final Presentation Video", style={"color": "#0b2f59"}),
+                html.P(
+                    "Watch the STA 160 capstone presentation (Fall 2025). The video streams from an external host for all visitors.",
+                    style={"maxWidth": "900px"},
+                ),
+                html.Iframe(
+                    src="https://drive.google.com/file/d/1bEmTBJQnok_IrbN_D8K-1aS9KV-Xirbp/preview",
+                    style={
+                        "width": "100%",
+                        "maxWidth": "900px",
+                        "height": "520px",
+                        "border": "none",
+                        "borderRadius": "8px",
+                        "boxShadow": "0 2px 6px rgba(0,0,0,0.15)",
+                        "marginTop": "15px",
+                    },
+                    allow="autoplay; encrypted-media",
+                ),
+                html.P(
+                    "Highlights: project goals, data pipeline, modeling approach, and key findings on audio features versus engagement.",
+                    style={"marginTop": "12px", "fontSize": "15px"},
+                ),
+            ],
+            style={"maxWidth": "950px", "margin": "auto"},
+        )
+
     elif selected == "team":
         return html.Div(
             [
@@ -1403,282 +996,6 @@ def update_table(selected_artist, search_text):
 
 
 @app.callback(
-    Output("single-output", "children"),
-    Input("predict-btn", "n_clicks"),
-    State("tempo", "value"),
-    State("energy", "value"),
-    State("loudness", "value"),
-    State("duration_ms", "value"),
-    prevent_initial_call=True,
-)
-def predict_single(n_clicks, tempo, energy, loudness, duration_ms):
-    if model is None:
-        return f"Model not loaded: {model_load_error}"
-    if target_names:
-        return "This model expects log-mel NPZ input. Use the batch upload below to score an NPZ file."
-
-    try:
-        df = pd.DataFrame(
-            [
-                {
-                    "tempo": tempo,
-                    "energy": energy,
-                    "loudness": loudness,
-                    "duration_ms": duration_ms,
-                }
-            ]
-        )
-        features = preprocess_features(df)
-        with torch.no_grad():
-            pred = model(features).cpu().numpy()
-        pred_vals = pred.squeeze()
-        if pred_vals.shape == ():
-            return f"Prediction: {float(pred_vals):.2f}"
-        return html.Div(
-            [
-                html.Div("Prediction:", style={"marginBottom": "6px"}),
-                html.Ul([html.Li(f"{i + 1}: {v:.2f}") for i, v in enumerate(pred_vals.tolist())]),
-            ]
-        )
-    except Exception as e:
-        return f"Error generating prediction: {e}"
-
-
-@app.callback(
-    Output("batch-output", "children"),
-    Input("upload-data", "contents"),
-    State("upload-data", "filename"),
-    prevent_initial_call=True,
-)
-def predict_batch(contents, filename):
-    if contents is None:
-        return "No file uploaded."
-    if model is None:
-        return f"Model not loaded: {model_load_error}"
-
-    try:
-        content_type, content_string = contents.split(",")
-        decoded = base64.b64decode(content_string)
-        is_npz = filename.lower().endswith(".npz") if filename else False
-
-        if is_npz:
-            features_tensor = prepare_logmel_tensor(
-                decoded, target_frames=target_frames, n_mels=128
-            )
-            with torch.no_grad():
-                preds = model(features_tensor).cpu().numpy()
-            preds = denormalize_predictions(preds)
-            preds_flat = preds.squeeze()
-
-            # For NPZ we show predictions with target names when available
-            if preds_flat.shape == ():
-                data_rows = [{"prediction": float(preds_flat)}]
-            elif preds_flat.ndim == 0:
-                data_rows = [{"prediction": float(preds_flat)}]
-            elif preds_flat.ndim == 1:
-                preds_flat = clamp_logs(preds_flat)
-                row = {}
-                for i, v in enumerate(preds_flat.tolist()):
-                    name = target_names[i] if i < len(target_names) else f"prediction_{i + 1}"
-                    row[name] = float(v)
-                    if name.endswith("_log"):
-                        base = name.replace("_log", "")
-                        row[base] = float(np.expm1(v))
-                        stats = target_stats.get(name, {})
-                        mu, sd = stats.get("mean"), stats.get("std")
-                        if mu is not None and sd is not None and sd > 0:
-                            z = (v - mu) / sd
-                            row[f"{base}_percentile"] = round(normal_percentile(z), 1)
-                data_rows = [row]
-            else:
-                data_rows = []
-                for row_vals in preds:
-                    row_vals = clamp_logs(np.array(row_vals))
-                    row = {}
-                    for i, v in enumerate(row_vals.tolist()):
-                        name = target_names[i] if i < len(target_names) else f"prediction_{i + 1}"
-                        row[name] = float(v)
-                        if name.endswith("_log"):
-                            base = name.replace("_log", "")
-                            row[base] = float(np.expm1(v))
-                            stats = target_stats.get(name, {})
-                            mu, sd = stats.get("mean"), stats.get("std")
-                            if mu is not None and sd is not None and sd > 0:
-                                z = (v - mu) / sd
-                                row[f"{base}_percentile"] = round(normal_percentile(z), 1)
-                    data_rows.append(row)
-            return dash_table.DataTable(
-                data=data_rows[:200],
-                page_size=10,
-                style_table={"overflowX": "auto"},
-                style_header={
-                    "backgroundColor": "#0b2f59",
-                    "color": "white",
-                    "fontWeight": "bold",
-                },
-            )
-        else:
-            df = pd.read_csv(io.BytesIO(decoded))
-            features = preprocess_features(df)
-            with torch.no_grad():
-                preds = model(features).cpu().numpy()
-            preds = denormalize_predictions(preds)
-            preds_flat = preds.squeeze()
-
-            df_out = df.copy()
-            if preds_flat.shape == ():
-                df_out["prediction"] = float(preds_flat)
-            elif preds_flat.ndim == 0:
-                df_out["prediction"] = float(preds_flat)
-            elif preds_flat.ndim == 1:
-                preds_flat = clamp_logs(preds_flat)
-                for i, v in enumerate(preds_flat.tolist()):
-                    name = target_names[i] if i < len(target_names) else f"prediction_{i + 1}"
-                    df_out[name] = float(v)
-                    if name.endswith("_log"):
-                        base = name.replace("_log", "")
-                        df_out[base] = float(np.expm1(v))
-                        stats = target_stats.get(name, {})
-                        mu, sd = stats.get("mean"), stats.get("std")
-                        if mu is not None and sd is not None and sd > 0:
-                            z = (v - mu) / sd
-                            df_out[f"{base}_percentile"] = round(normal_percentile(z), 1)
-            else:
-                for i in range(preds.shape[1]):
-                    name = target_names[i] if i < len(target_names) else f"prediction_{i + 1}"
-                    col_vals = clamp_logs(preds[:, i])
-                    df_out[name] = col_vals
-                    if name.endswith("_log"):
-                        base = name.replace("_log", "")
-                        df_out[base] = np.expm1(col_vals)
-                        stats = target_stats.get(name, {})
-                        mu, sd = stats.get("mean"), stats.get("std")
-                        if mu is not None and sd is not None and sd > 0:
-                            z = (col_vals - mu) / sd
-                            df_out[f"{base}_percentile"] = normal_percentile(z)
-
-            return dash_table.DataTable(
-                data=df_out.head(200).to_dict("records"),
-                page_size=10,
-                style_table={"overflowX": "auto"},
-                style_header={
-                    "backgroundColor": "#0b2f59",
-                    "color": "white",
-                    "fontWeight": "bold",
-                },
-            )
-    except Exception as e:
-        return f"Error processing {filename}: {e}"
-
-
-@app.callback(
-    Output("audio-output", "children"),
-    Input("upload-audio", "contents"),
-    State("upload-audio", "filename"),
-    prevent_initial_call=True,
-)
-def predict_audio(contents, filename):
-    if contents is None:
-        return "No audio file uploaded."
-    if model is None:
-        return f"Model not loaded: {model_load_error}"
-    try:
-        content_type, content_string = contents.split(",")
-        decoded = base64.b64decode(content_string)
-        features_tensor = logmel_from_audio_bytes(decoded, target_frames=target_frames)
-        with torch.no_grad():
-            preds = model(features_tensor).cpu().numpy()
-        preds = denormalize_predictions(preds)
-        preds_flat = preds.squeeze()
-
-        pred_row = {}
-        if preds_flat.ndim == 0:
-            pred_row["prediction"] = float(preds_flat)
-        elif preds_flat.ndim == 1:
-            preds_flat = clamp_logs(preds_flat)
-            for i, v in enumerate(preds_flat.tolist()):
-                name = target_names[i] if i < len(target_names) else f"prediction_{i + 1}"
-                pred_row[name] = float(v)
-                if name.endswith("_log"):
-                    base = name.replace("_log", "")
-                    pred_row[base] = float(np.expm1(v))
-                    stats = target_stats.get(name, {})
-                    mu, sd = stats.get("mean"), stats.get("std")
-                    if mu is not None and sd is not None and sd > 0:
-                        z = (v - mu) / sd
-                        pred_row[f"{base}_percentile"] = round(normal_percentile(z), 1)
-
-        rec_table = None
-        if rec_matrix is not None and target_names:
-            sim_cols = []
-            sim_vec = []
-            for col in ["Views", "Likes", "Comments"]:
-                log_name = f"{col.lower()}_log"
-                if log_name in target_names:
-                    idx = target_names.index(log_name)
-                    sim_cols.append(col)
-                    sim_vec.append(preds_flat[idx])
-            if sim_vec and len(sim_vec) == rec_matrix.shape[1]:
-                sim_vec = np.array(sim_vec, dtype=float)
-                rec_norm = np.linalg.norm(rec_matrix, axis=1, keepdims=True) + 1e-8
-                vec_norm = np.linalg.norm(sim_vec) + 1e-8
-                sims = (rec_matrix @ sim_vec) / (rec_norm.flatten() * vec_norm)
-                top_idx = np.argsort(sims)[::-1][:5]
-                rows = []
-                for i in top_idx:
-                    row = {"score": float(sims[i])}
-                    if rec_meta is not None:
-                        for c in rec_meta.columns:
-                            row[c] = rec_meta.iloc[i][c]
-                    for c in rec_feature_cols:
-                        row[c] = float(clean_data.iloc[i][c])
-                    rows.append(row)
-                rec_table = dash_table.DataTable(
-                    data=rows,
-                    page_size=5,
-                    style_table={"overflowX": "auto"},
-                    style_header={
-                        "backgroundColor": "#0b2f59",
-                        "color": "white",
-                        "fontWeight": "bold",
-                    },
-                )
-
-        return html.Div(
-            [
-                html.H4(f"Prediction from {filename}", style={"color": "#0b2f59"}),
-                dash_table.DataTable(
-                    data=[pred_row],
-                    page_size=1,
-                    style_table={"overflowX": "auto"},
-                    style_header={
-                        "backgroundColor": "#0b2f59",
-                        "color": "white",
-                        "fontWeight": "bold",
-                    },
-                ),
-                html.Br(),
-                html.H4("Similar songs (by engagement profile)", style={"color": "#0b2f59"}),
-                rec_table or html.Div("Not enough data for recommendations."),
-            ]
-        )
-    except Exception as e:
-        return f"Error processing {filename}: {e}"
-
-
-@app.callback(
-    [Output("cnn-section", "style"), Output("xgb-section", "style")],
-    Input("model-engine", "value"),
-)
-def toggle_model_sections(engine):
-    show = {"display": "block"}
-    hide = {"display": "none"}
-    if engine == "xgb":
-        return hide, show
-    return show, hide
-
-
-@app.callback(
     Output("xgb-upload-output", "children"),
     Input("xgb-upload", "contents"),
     State("xgb-upload", "filename"),
@@ -1730,43 +1047,51 @@ def get_lyrics_url(n_clicks, title, artist):
 
 
 @app.callback(
-    Output("xgb-e2e-output", "children"),
+    [Output("xgb-e2e-output", "children"), Output("xgb-audio-status", "children")],
     Input("xgb-e2e-button", "n_clicks"),
+    State("xgb-audio", "contents"),
     State("xgb-song-title", "value"),
     State("xgb-song-artist", "value"),
-    State("xgb-audio", "contents"),
     State("xgb-audio", "filename"),
     prevent_initial_call=True,
 )
-def run_xgb_e2e(n_clicks, title, artist, contents, filename):
+def run_xgb_e2e(n_clicks, contents, title, artist, filename):
     try:
         if xgb_pop_model is None or xgb_market_model is None or xgb_scaler is None:
-            return "XGB artifacts not loaded. Ensure xgb_popularity.pkl, xgb_marketability.pkl, xgb_scaler.pkl are in the repo root."
-        # Title/artist optional: if missing, skip external lookups
+            return (
+                "XGB artifacts not loaded. Ensure xgb_popularity.pkl, xgb_marketability.pkl, xgb_scaler.pkl are in the repo root.",
+                "Artifacts missing.",
+            )
+
         title_val = title.strip() if title else ""
         artist_val = artist.strip() if artist else ""
         if not xgb_feature_cols:
-            return "XGB feature columns not available."
+            return "XGB feature columns not available.", "Missing feature columns."
 
         yt_stats = {"error": "Skipped (no title/artist)", "data": {}} if not title_val else get_youtube_stats(title_val, artist_val or None)
         lyrics_link = None
         if title_val:
             lyrics_link = fetch_lyrics_url(title_val, artist_val or None)
 
+        base_row = match_catalog_row(title_val, artist_val)
         audio_feats = {}
         audio_err = None
+        status_text = "Analyzing..."
+
         if contents:
             try:
                 _, content_string = contents.split(",")
                 decoded = base64.b64decode(content_string)
                 audio_feats = compute_basic_audio_features(decoded)
+                status_text = f"Uploaded {filename or 'file'}; analysis complete."
             except Exception as e:
                 audio_err = f"Audio feature extraction failed: {e}"
-                audio_feats = {}
+                status_text = "Audio upload processed but feature extraction failed."
         else:
             audio_err = "No audio provided; using defaults for audio features."
+            status_text = "No audio uploaded; using metadata only."
 
-        row = build_xgb_feature_row(audio_feats, yt_stats)
+        row = build_xgb_feature_row(base_row, audio_feats, yt_stats)
         df_row = pd.DataFrame([[row.get(col, 0.0) for col in xgb_feature_cols]], columns=xgb_feature_cols)
         df_scaled = xgb_scaler.transform(df_row)
         pop_pred = xgb_pop_model.predict(df_scaled)[0]
@@ -1776,21 +1101,61 @@ def run_xgb_e2e(n_clicks, title, artist, contents, filename):
             html.P(f"Predicted Popularity: {pop_pred:.2f}"),
             html.P(f"Predicted Marketability: {mkt_pred:.2f}"),
         ]
+
         if yt_stats and not yt_stats.get("error"):
             d = yt_stats["data"]
-            details.append(html.P(f"YouTube stats - Views: {d.get('views')}, Likes: {d.get('likes')}, Comments: {d.get('comments')}"))
+            details.append(
+                html.P(
+                    f"YouTube stats - Views: {d.get('views')}, Likes: {d.get('likes')}, Comments: {d.get('comments')}"
+                )
+            )
         elif yt_stats and yt_stats.get("error"):
             details.append(html.P(f"YouTube stats error: {yt_stats['error']}"))
+
         if audio_err:
             details.append(html.P(audio_err, style={"color": "red"}))
+
         if isinstance(lyrics_link, str) and lyrics_link.startswith("http"):
             details.append(html.A("View lyrics on Genius", href=lyrics_link, target="_blank"))
         elif lyrics_link:
             details.append(html.P(f"Lyrics: {lyrics_link}"))
 
-        return html.Div(details)
+        pct_parts = []
+        nn_lines = []
+        if "Predicted_Popularity" in model_data.columns and "Predicted_Marketability" in model_data.columns:
+            pop_series = model_data["Predicted_Popularity"].dropna()
+            mkt_series = model_data["Predicted_Marketability"].dropna()
+            if len(pop_series) > 0:
+                pop_pct = float((pop_series < pop_pred).mean() * 100)
+                pct_parts.append(f"Popularity is around the {pop_pct:.1f}th percentile of the catalog.")
+                pop_diff = (pop_series - pop_pred).abs()
+                nn_idx = pop_diff.nsmallest(3).index
+                for i in nn_idx:
+                    row_nn = model_data.loc[i]
+                    nn_lines.append(
+                        f"Similar popularity: {row_nn.get('Artist','?')} - {row_nn.get('Track','?')} ({row_nn.get('Predicted_Popularity',0):.2f})"
+                    )
+            if len(mkt_series) > 0:
+                mkt_pct = float((mkt_series < mkt_pred).mean() * 100)
+                pct_parts.append(f"Marketability is around the {mkt_pct:.1f}th percentile of the catalog.")
+                mkt_diff = (mkt_series - mkt_pred).abs()
+                nn_idx = mkt_diff.nsmallest(3).index
+                for i in nn_idx:
+                    row_nn = model_data.loc[i]
+                    nn_lines.append(
+                        f"Similar marketability: {row_nn.get('Artist','?')} - {row_nn.get('Track','?')} ({row_nn.get('Predicted_Marketability',0):.2f})"
+                    )
+
+        if pct_parts:
+            details.append(html.P(" ".join(pct_parts), style={"color": "#0b2f59"}))
+        if nn_lines:
+            details.append(html.Ul([html.Li(t) for t in nn_lines]))
+
+        if not status_text:
+            status_text = "Analysis complete."
+        return html.Div(details), status_text
     except Exception as e:
-        return f"End-to-end XGB error: {e}"
+        return f"End-to-end XGB error: {e}", "Error during processing."
 # =========================================================
 # CALLBACK: FILTERING FOR MODEL TABLE (PREDICTIONS)
 # =========================================================
@@ -1829,6 +1194,84 @@ def update_model_table(selected_artist, selected_album, search_text):
     ]
     existing = [c for c in cols_to_keep if c in df.columns]
     return df[existing].to_dict("records")
+
+
+# =========================================================
+# CALLBACK: COMPARISON
+# =========================================================
+
+@app.callback(
+    [
+        Output("xgb-compare-output", "children"),
+        Output("xgb-compare-status-a", "children"),
+        Output("xgb-compare-status-b", "children"),
+    ],
+    [
+        Input("xgb-compare-button", "n_clicks"),
+        Input("xgb-compare-audio-a", "contents"),
+        Input("xgb-compare-audio-b", "contents"),
+    ],
+    [
+        State("compare-title-a", "value"),
+        State("compare-artist-a", "value"),
+        State("compare-title-b", "value"),
+        State("compare-artist-b", "value"),
+        State("xgb-compare-audio-a", "filename"),
+        State("xgb-compare-audio-b", "filename"),
+    ],
+    prevent_initial_call=True,
+)
+def run_xgb_compare(n_clicks, contents_a, contents_b, title_a, artist_a, title_b, artist_b, fname_a, fname_b):
+    try:
+        triggered = callback_context.triggered[0]["prop_id"].split(".")[0] if callback_context.triggered else ""
+        status_a = ""
+        status_b = ""
+        if triggered == "xgb-compare-audio-a":
+            if contents_a and fname_a:
+                status_a = f"Uploaded A: {fname_a}"
+            elif contents_a:
+                status_a = "File A uploaded."
+        if triggered == "xgb-compare-audio-b":
+            if contents_b and fname_b:
+                status_b = f"Uploaded B: {fname_b}"
+            elif contents_b:
+                status_b = "File B uploaded."
+        if triggered != "xgb-compare-button":
+            return no_update, status_a, status_b
+
+        details_a, status_a_run, preds_a = single_xgb_prediction(title_a.strip() if title_a else "", artist_a.strip() if artist_a else "", contents_a, fname_a)
+        details_b, status_b_run, preds_b = single_xgb_prediction(title_b.strip() if title_b else "", artist_b.strip() if artist_b else "", contents_b, fname_b)
+        if status_a_run:
+            status_a = status_a_run
+        if status_b_run:
+            status_b = status_b_run
+
+        comparison = []
+        if preds_a and preds_b:
+            if preds_a["pop"] > preds_b["pop"]:
+                comparison.append(html.H4("Song A predicted higher popularity", style={"color": "#0b2f59"}))
+            elif preds_b["pop"] > preds_a["pop"]:
+                comparison.append(html.H4("Song B predicted higher popularity", style={"color": "#0b2f59"}))
+            else:
+                comparison.append(html.H4("Popularity scores are equal", style={"color": "#0b2f59"}))
+            comparison.append(html.P(f"Song A - Popularity: {preds_a['pop']:.2f} | Marketability: {preds_a['mkt']:.2f}"))
+            comparison.append(html.P(f"Song B - Popularity: {preds_b['pop']:.2f} | Marketability: {preds_b['mkt']:.2f}"))
+
+        output = html.Div(
+            [
+                html.H3("Comparison Result", style={"color": "#0b2f59"}),
+                *(comparison if comparison else [html.P("Could not compare (missing predictions).")]),
+                html.Br(),
+                html.H4("Song A Details", style={"color": "#0b2f59"}),
+                html.Div(details_a),
+                html.Br(),
+                html.H4("Song B Details", style={"color": "#0b2f59"}),
+                html.Div(details_b),
+            ]
+        )
+        return output, status_a, status_b
+    except Exception as e:
+        return f"Comparison error: {e}", "Error", "Error"
 
 
 # =========================================================
